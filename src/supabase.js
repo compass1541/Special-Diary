@@ -103,6 +103,23 @@ class SupabaseStorage {
     }
 
     /**
+     * 구글 계정으로 로그인 (OAuth)
+     */
+    async signInWithGoogle() {
+        if (!this.isConnected()) throw new Error('Supabase가 연결되지 않았습니다.');
+
+        const { data, error } = await supabaseClient.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+                redirectTo: window.location.origin
+            }
+        });
+
+        if (error) throw error;
+        return data;
+    }
+
+    /**
      * 로그아웃
      */
     async signOut() {

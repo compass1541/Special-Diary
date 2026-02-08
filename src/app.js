@@ -138,6 +138,9 @@ export class DiaryApp {
             this.handleSignup();
         });
 
+        // Google Login
+        document.getElementById('googleLoginBtn')?.addEventListener('click', () => this.handleGoogleLogin());
+
         // Sync buttons
         document.getElementById('syncYes')?.addEventListener('click', () => this.syncLocalToCloud());
         document.getElementById('syncNo')?.addEventListener('click', () => this.closeAuthModal());
@@ -250,6 +253,17 @@ export class DiaryApp {
         } finally {
             submitBtn.disabled = false;
             submitBtn.textContent = '로그인';
+        }
+    }
+
+    async handleGoogleLogin() {
+        try {
+            this.hideAuthError();
+            await supabaseStorage.signInWithGoogle();
+            // OAuth는 리다이렉트되므로 이후 로직은 페이지 로드 시 처리됨
+        } catch (error) {
+            console.error('Google login error:', error);
+            this.showAuthError('구글 로그인 중 오류가 발생했습니다.');
         }
     }
 
