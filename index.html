@@ -64,6 +64,16 @@
                     </svg>
                     <span>AI로 일기 검색...</span>
                 </button>
+                <button class="ai-search-btn" id="openGraphView" style="margin-top: 8px;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="18" cy="5" r="3"></circle>
+                        <circle cx="6" cy="12" r="3"></circle>
+                        <circle cx="18" cy="19" r="3"></circle>
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                    </svg>
+                    <span>일기 3D 연결망 보기</span>
+                </button>
             </div>
 
             <!-- Calendar Mini -->
@@ -173,6 +183,26 @@
                                 placeholder="오늘 하루를 한 줄로 요약하면?" maxlength="100">
                         </div>
                     </div>
+
+                    <!-- Linked Entries -->
+                    <div class="linked-entries-section" id="linkedEntriesSection" style="display: none;">
+                        <div class="linked-entries-header">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                            </svg>
+                            <span>연결된 일기</span>
+                        </div>
+                        <div class="linked-entries-list" id="linkedEntriesList"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Link Autocomplete Popup -->
+            <div class="link-autocomplete-popup" id="linkAutocompletePopup" style="display: none;">
+                <div class="link-autocomplete-list" id="linkAutocompleteList">
+                    <!-- Suggestions will appear here -->
                 </div>
             </div>
         </main>
@@ -223,6 +253,24 @@
                 <div class="ai-suggestion-content" id="aiSuggestionContent">
                     <!-- AI suggestions will appear here -->
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 3D Graph Modal -->
+    <div class="modal-overlay" id="graphViewModal">
+        <div class="modal graph-modal" style="width: 90vw; max-width: 1200px; height: 90vh; max-height: none;">
+            <div class="modal-header">
+                <h2>일기 3D 연결망</h2>
+                <button class="modal-close" id="closeGraphView">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 6 6 18M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body" style="padding: 0; overflow: hidden; position: relative;">
+                <div id="3d-graph" style="width: 100%; height: 100%;"></div>
+                <div class="graph-tooltip" id="graphTooltip"></div>
             </div>
         </div>
     </div>

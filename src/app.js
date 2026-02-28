@@ -4,6 +4,7 @@
 import { storage } from './storage.js';
 import { supabaseStorage } from './supabase.js';
 import { gemini } from './gemini.js';
+import ForceGraph from 'force-graph';
 
 export class DiaryApp {
     constructor() {
@@ -13,6 +14,12 @@ export class DiaryApp {
         this.datesWithEntries = new Set();
         this.entries = [];
         this.useSupabase = false; // Supabase 사용 여부
+
+        // Link autocomplete state
+        this.autocompleteActive = false;
+        this.autocompleteQuery = '';
+        this.autocompleteIndex = -1;
+        this.autocompleteResults = [];
 
         this.init();
     }
@@ -78,6 +85,10 @@ export class DiaryApp {
         // AI Suggestion Modal
         document.getElementById('closeAiSuggestion').addEventListener('click', () => this.closeAISuggestionModal());
 
+        // Graph View Modal
+        document.getElementById('openGraphView').addEventListener('click', () => this.openGraphViewModal());
+        document.getElementById('closeGraphView').addEventListener('click', () => this.closeGraphViewModal());
+
         // Modal overlay clicks
         document.getElementById('aiSearchModal').addEventListener('click', (e) => {
             if (e.target === e.currentTarget) this.closeAISearchModal();
@@ -85,16 +96,34 @@ export class DiaryApp {
         document.getElementById('aiSuggestionModal').addEventListener('click', (e) => {
             if (e.target === e.currentTarget) this.closeAISuggestionModal();
         });
+        document.getElementById('graphViewModal').addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) this.closeGraphViewModal();
+        });
 
         // Auto-save on content change
         let saveTimeout;
-        document.getElementById('diaryContent').addEventListener('input', () => {
+        const diaryContent = document.getElementById('diaryContent');
+
+        diaryContent.addEventListener('input', (e) => {
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => this.autoSave(), 2000);
+            this.handleEditorInput(e); // 링크 자동완성 감지 및 링크된 항목 업데이트
         });
+
+        diaryContent.addEventListener('keydown', (e) => {
+            this.handleEditorKeyDown(e); // 자동완성 네비게이션
+        });
+
         document.getElementById('dailyComment').addEventListener('input', () => {
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => this.autoSave(), 2000);
+        });
+
+        // Hide autocomplete on click outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('#linkAutocompletePopup') && !e.target.closest('#diaryContent')) {
+                this.closeAutocomplete();
+            }
         });
 
         // Keyboard shortcuts
@@ -518,6 +547,9 @@ export class DiaryApp {
 
         document.getElementById('diaryContent').value = entry?.content || '';
         document.getElementById('dailyComment').value = entry?.dailyComment || '';
+
+        // Render linked entries
+        this.renderLinkedEntries(entry?.content || '');
     }
 
     openTodayEntry() {
@@ -590,6 +622,222 @@ export class DiaryApp {
         this.renderEntriesList();
 
         this.showToast('일기가 삭제되었습니다');
+    }
+
+    // ========================================
+    // Link System (Obsidian Style)
+    // ========================================
+
+    handleEditorInput(e) {
+        const content = e.target.value;
+        const cursorPosition = e.target.selectionStart;
+
+        // Render linked entries
+        this.renderLinkedEntries(content);
+
+        // Check for trigger '[['
+        const textBeforeCursor = content.substring(0, cursorPosition);
+        const match = textBeforeCursor.match(/\[\[([^\]]*)$/);
+
+        if (match) {
+            this.autocompleteActive = true;
+            this.autocompleteQuery = match[1].toLowerCase();
+            this.showAutocompletePopup(e.target);
+        } else {
+            this.closeAutocomplete();
+        }
+    }
+
+    handleEditorKeyDown(e) {
+        if (!this.autocompleteActive) return;
+
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            this.navigateAutocomplete(1);
+        } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            this.navigateAutocomplete(-1);
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            this.selectAutocompleteSuggestion();
+        } else if (e.key === 'Escape') {
+            this.closeAutocomplete();
+        }
+    }
+
+    showAutocompletePopup(textarea) {
+        const popup = document.getElementById('linkAutocompletePopup');
+        const list = document.getElementById('linkAutocompleteList');
+
+        // Filter entries based on query (by date or content)
+        this.autocompleteResults = this.entries.filter(entry => {
+            // Don't link to current entry
+            if (this.selectedDate && this.formatDateId(this.selectedDate) === entry.id) {
+                return false;
+            }
+            const dateStr = this.formatDisplayDate(new Date(entry.date)).toLowerCase();
+            const idMatch = entry.id.toLowerCase().includes(this.autocompleteQuery);
+            const contentMatch = (entry.content || '').toLowerCase().includes(this.autocompleteQuery);
+            const dateMatch = dateStr.includes(this.autocompleteQuery);
+            return idMatch || contentMatch || dateMatch;
+        }).slice(0, 5); // Limit to 5 results
+
+        if (this.autocompleteResults.length === 0) {
+            this.closeAutocomplete();
+            return;
+        }
+
+        // Reset index if needed
+        if (this.autocompleteIndex >= this.autocompleteResults.length) {
+            this.autocompleteIndex = 0;
+        } else if (this.autocompleteIndex < 0) {
+            this.autocompleteIndex = 0;
+        }
+
+        // Render results
+        list.innerHTML = '';
+        this.autocompleteResults.forEach((entry, index) => {
+            const date = new Date(entry.date);
+            const dateStr = this.formatDisplayDate(date);
+            const preview = (entry.content || '').substring(0, 30) + ((entry.content || '').length > 30 ? '...' : '');
+
+            const item = document.createElement('div');
+            item.className = `link-autocomplete-item ${index === this.autocompleteIndex ? 'active' : ''}`;
+            item.innerHTML = `
+                <div class="link-item-date">${dateStr}</div>
+                <div class="link-item-preview">${preview || '내용 없음'}</div>
+            `;
+
+            item.addEventListener('mouseenter', () => {
+                this.autocompleteIndex = index;
+                this.updateAutocompleteSelection();
+            });
+
+            item.addEventListener('click', () => {
+                this.autocompleteIndex = index;
+                this.selectAutocompleteSuggestion();
+            });
+
+            list.appendChild(item);
+        });
+
+        // Position popup near cursor (basic implementation)
+        // A robust implementation would require measuring text node coordinates
+        // For simplicity, we place it near the top of the editor based on scroll
+        const rect = textarea.getBoundingClientRect();
+        popup.style.top = `${rect.top + 30}px`;
+        popup.style.left = `${rect.left + 20}px`;
+        popup.style.display = 'block';
+    }
+
+    navigateAutocomplete(delta) {
+        this.autocompleteIndex += delta;
+        if (this.autocompleteIndex < 0) {
+            this.autocompleteIndex = this.autocompleteResults.length - 1;
+        } else if (this.autocompleteIndex >= this.autocompleteResults.length) {
+            this.autocompleteIndex = 0;
+        }
+        this.updateAutocompleteSelection();
+    }
+
+    updateAutocompleteSelection() {
+        const items = document.querySelectorAll('.link-autocomplete-item');
+        items.forEach((item, idx) => {
+            if (idx === this.autocompleteIndex) {
+                item.classList.add('active');
+            } else {
+                item.classList.remove('active');
+            }
+        });
+    }
+
+    selectAutocompleteSuggestion() {
+        if (this.autocompleteIndex < 0 || this.autocompleteIndex >= this.autocompleteResults.length) return;
+
+        const selectedEntry = this.autocompleteResults[this.autocompleteIndex];
+        const textarea = document.getElementById('diaryContent');
+        const content = textarea.value;
+        const cursorPosition = textarea.selectionStart;
+
+        // Find the start of the trigger '[['
+        const textBeforeCursor = content.substring(0, cursorPosition);
+        const matchIndex = textBeforeCursor.lastIndexOf('[[');
+
+        if (matchIndex !== -1) {
+            const dateId = selectedEntry.id;
+            const newContent = content.substring(0, matchIndex) + `[[${dateId}]] ` + content.substring(cursorPosition);
+
+            textarea.value = newContent;
+
+            // Move cursor after the inserted link
+            const newCursorPos = matchIndex + `[[${dateId}]] `.length;
+            textarea.setSelectionRange(newCursorPos, newCursorPos);
+
+            this.renderLinkedEntries(newContent);
+            this.autoSave();
+        }
+
+        this.closeAutocomplete();
+        textarea.focus();
+    }
+
+    closeAutocomplete() {
+        this.autocompleteActive = false;
+        this.autocompleteQuery = '';
+        this.autocompleteIndex = -1;
+        document.getElementById('linkAutocompletePopup').style.display = 'none';
+    }
+
+    renderLinkedEntries(content) {
+        if (!content) content = '';
+        const section = document.getElementById('linkedEntriesSection');
+        const listContainer = document.getElementById('linkedEntriesList');
+
+        // Find all links matching [[YYYY-MM-DD]]
+        const linkRegex = /\[\[(\d{4}-\d{2}-\d{2})\]\]/g;
+        const matches = [...content.matchAll(linkRegex)];
+        const linkedDateIds = [...new Set(matches.map(m => m[1]))]; // Unique IDs
+
+        if (linkedDateIds.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+
+        listContainer.innerHTML = '';
+        let hasValidLinks = false;
+
+        linkedDateIds.forEach(dateId => {
+            // Find if entry exists
+            const entry = this.entries.find(e => e.id === dateId);
+            if (entry) {
+                hasValidLinks = true;
+                const pill = document.createElement('div');
+                pill.className = 'linked-entry-pill';
+
+                const date = new Date(entry.date);
+                pill.innerHTML = `
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="16" y1="2" x2="16" y2="6"></line>
+                        <line x1="8" y1="2" x2="8" y2="6"></line>
+                        <line x1="3" y1="10" x2="21" y2="10"></line>
+                    </svg>
+                    <span>${this.formatDisplayDate(date)}</span>
+                `;
+
+                pill.addEventListener('click', () => {
+                    this.selectDate(date);
+                });
+
+                listContainer.appendChild(pill);
+            }
+        });
+
+        if (hasValidLinks) {
+            section.style.display = 'block';
+        } else {
+            section.style.display = 'none';
+        }
     }
 
     // ========================================
@@ -733,5 +981,191 @@ export class DiaryApp {
         setTimeout(() => {
             toast.classList.remove('active');
         }, 3000);
+    }
+
+    // ========================================
+    // Graph View (3D Network)
+    // ========================================
+
+    openGraphViewModal() {
+        document.getElementById('graphViewModal').classList.add('active');
+        // Small delay to ensure the modal is displayed and has valid dimensions
+        setTimeout(() => this.renderGraphView(), 100);
+    }
+
+    closeGraphViewModal() {
+        document.getElementById('graphViewModal').classList.remove('active');
+        if (this.graph) {
+            this.graph._destructor();
+            this.graph = null;
+        }
+    }
+
+    renderGraphView() {
+        const graphContainer = document.getElementById('3d-graph');
+        graphContainer.innerHTML = '';
+        const tooltip = document.getElementById('graphTooltip');
+
+        if (this.entries.length === 0) {
+            graphContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);">일기가 없습니다.</div>';
+            return;
+        }
+
+        const nodes = [];
+        const links = [];
+        const linkRegex = /\[\[(\d{4}-\d{2}-\d{2})\]\]/g;
+        const nodeMap = new Map();
+
+        // Create nodes
+        // Create nodes
+        this.entries.forEach(entry => {
+            nodes.push({
+                id: entry.id,
+                name: this.formatDisplayDate(new Date(entry.date)),
+                group: entry.id.substring(0, 7), // YYYY-MM
+                val: 2,
+                content: entry.content ? entry.content.substring(0, 50) + '...' : '내용 없음'
+            });
+            nodeMap.set(entry.id, true);
+        });
+
+        // Create links
+        this.entries.forEach(entry => {
+            if (!entry.content) return;
+            const matches = [...entry.content.matchAll(linkRegex)];
+            matches.forEach(match => {
+                const targetId = match[1];
+                if (nodeMap.has(targetId)) {
+                    links.push({
+                        source: entry.id,
+                        target: targetId
+                    });
+
+                    // Increase node size if it has explicit connections
+                    const sourceNode = nodes.find(n => n.id === entry.id);
+                    const targetNode = nodes.find(n => n.id === targetId);
+                    if (sourceNode) sourceNode.val += 1;
+                    if (targetNode) targetNode.val += 1;
+                }
+            });
+        });
+
+        // Basic keyword extraction & clustering logic
+        // In a real app, this should rely on real NLP or embeddings (e.g. from Gemini)
+        const getKeywords = (text) => {
+            if (!text) return new Set();
+            // Remove special chars, split by space, keep words > 1 char
+            const words = text.replace(/[^\w\s가-힣]/g, '').toLowerCase().split(/\s+/);
+            return new Set(words.filter(w => w.length > 1));
+        };
+
+        const entryKeywords = new Map();
+        this.entries.forEach(entry => {
+            entryKeywords.set(entry.id, getKeywords(entry.content));
+        });
+
+        // Add implicit keyword-based links (connect entries with >= 3 shared words)
+        for (let i = 0; i < this.entries.length; i++) {
+            for (let j = i + 1; j < this.entries.length; j++) {
+                const entryA = this.entries[i];
+                const entryB = this.entries[j];
+                const keywordsA = entryKeywords.get(entryA.id);
+                const keywordsB = entryKeywords.get(entryB.id);
+
+                let sharedCount = 0;
+                keywordsA.forEach(k => { if (keywordsB.has(k)) sharedCount++; });
+
+                // If they share 3 or more meaningful common words, link them implicitly
+                if (sharedCount >= 3) {
+                    links.push({
+                        source: entryA.id,
+                        target: entryB.id,
+                        implicit: true // Marker for weaker connection styling later if needed
+                    });
+
+                    // Slightly increase node size to highlight heavily related topics
+                    const sourceNode = nodes.find(n => n.id === entryA.id);
+                    const targetNode = nodes.find(n => n.id === entryB.id);
+                    if (sourceNode) sourceNode.val += 0.2;
+                    if (targetNode) targetNode.val += 0.2;
+                }
+            }
+        }
+
+        const graphData = { nodes, links };
+
+        this.graph = ForceGraph()(graphContainer)
+            .graphData(graphData)
+            .nodeLabel(() => '') // Disable default tooltip
+            .nodeAutoColorBy('group')
+            .nodeRelSize(4)
+            .linkWidth(link => link.implicit ? 1.0 : 2.5) // Make lines thicker
+            .linkColor(link => link.implicit ? 'rgba(230, 230, 240, 0.4)' : 'rgba(255, 255, 255, 0.9)') // Make lines much brighter and solid
+            .linkLineDash(() => null) // ALWAYS solid lines
+            .linkDirectionalParticles(0) // Remove particles for a clean look
+            .nodeCanvasObject((node, ctx, globalScale) => {
+                const label = node.name;
+                // Scale node size by its link value (val)
+                const nodeSize = Math.max(2, node.val * 1.5);
+
+                // Draw node circle
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, nodeSize, 0, 2 * Math.PI, false);
+                // Fill with group color or a default
+                ctx.fillStyle = node.color || '#fff';
+                ctx.fill();
+
+                // Detailed crisp border
+                ctx.lineWidth = 1 / globalScale;
+                ctx.strokeStyle = '#ffffff';
+                ctx.stroke();
+
+                // Draw text label
+                const fontSize = 10 / globalScale;
+                ctx.font = `${fontSize}px "Inter", -apple-system, sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = 'rgba(230, 230, 240, 0.9)';
+
+                // Show labels, offset below the node
+                ctx.fillText(label, node.x, node.y + nodeSize + (2 / globalScale));
+            })
+            .onNodeHover(node => {
+                graphContainer.style.cursor = node ? 'pointer' : null;
+                if (node) {
+                    tooltip.innerHTML = `<strong>${node.name}</strong><br/>${node.content}`;
+                    tooltip.style.display = 'block';
+                } else {
+                    tooltip.style.display = 'none';
+                }
+            })
+            .onNodeClick(node => {
+                // Focus on node
+                this.graph.centerAt(node.x, node.y, 1000);
+                this.graph.zoom(8, 2000);
+            });
+
+        // Track mouse to position tooltip
+        graphContainer.addEventListener('mousemove', e => {
+            if (tooltip.style.display === 'block') {
+                const rect = graphContainer.getBoundingClientRect();
+                let x = e.clientX - rect.left + 15;
+                let y = e.clientY - rect.top + 15;
+
+                // Keep tooltip within visible area
+                if (x + tooltip.offsetWidth > rect.width) x = e.clientX - rect.left - tooltip.offsetWidth - 10;
+                if (y + tooltip.offsetHeight > rect.height) y = e.clientY - rect.top - tooltip.offsetHeight - 10;
+
+                tooltip.style.left = `${x}px`;
+                tooltip.style.top = `${y}px`;
+            }
+        });
+
+        // Setup scene
+        this.graph.backgroundColor('rgba(0,0,0,0)'); // Transparent to show CSS background
+
+        // Tweak physics: spread nodes and make links longer
+        this.graph.d3Force('charge').strength(-300);
+        this.graph.d3Force('link').distance(80);
     }
 }
