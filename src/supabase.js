@@ -4,6 +4,7 @@
  * Supabase를 사용한 일기 데이터 클라우드 동기화
  */
 import { createClient } from '@supabase/supabase-js';
+import { escapePostgRESTValue } from './utils/security.js';
 
 // 환경 변수에서 설정 로드
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
@@ -137,21 +138,52 @@ class SupabaseStorage {
         return this.user;
     }
 
+    /**
+     * 인증된 Supabase Edge Function 호출 헬퍼.
+     * 주로 ai-proxy 호출에 사용 (C6).
+     */
+    async invokeFunction(name, body) {
+        if (!this.isConnected()) throw new Error('Supabase가 연결되지 않았습니다.');
+        if (!this.user) throw new Error('로그인이 필요합니다.');
+        const { data, error } = await supabaseClient.functions.invoke(name, { body });
+        if (error) throw error;
+        return data;
+    }
+
     // ======================================
     // 일기 데이터 CRUD
     // ======================================
 
     /**
      * 일기 저장 또는 업데이트 (upsert)
+     *
+     * H5 충돌 감지: options.expectedUpdatedAt이 주어지면 서버 측 updated_at과 비교해
+     * 다른 곳에서 수정됐으면 ConflictError를 던진다 (호출자가 사용자에게 선택지를 제공).
+     * options.force=true면 충돌 검사 무시.
      */
-    async saveEntry(entry) {
+    async saveEntry(entry, options = {}) {
         if (!this.isConnected()) throw new Error('Supabase가 연결되지 않았습니다.');
         if (!this.user) throw new Error('로그인이 필요합니다.');
 
+        if (options.expectedUpdatedAt && !options.force) {
+            const { data: current } = await supabaseClient
+                .from('diary_entries')
+                .select('updated_at')
+                .eq('id', entry.id)
+                .maybeSingle();
+            if (current && new Date(current.updated_at).getTime() > options.expectedUpdatedAt) {
+                const err = new Error('이 일기가 다른 기기에서 수정되었습니다.');
+                err.code = 'CONFLICT';
+                err.serverUpdatedAt = current.updated_at;
+                throw err;
+            }
+        }
+
         const now = new Date().toISOString();
+        // user_id는 DB에서 DEFAULT auth.uid()로 자동 부여되므로 클라이언트가 보내지 않는다 (M2).
+        // RLS WITH CHECK (user_id = auth.uid())가 위조를 차단한다.
         const entryData = {
             id: entry.id,  // 날짜 ID (YYYY-MM-DD)
-            user_id: this.user.id,
             date: entry.date,
             content: entry.content || '',
             daily_comment: entry.dailyComment || '',
@@ -194,16 +226,26 @@ class SupabaseStorage {
 
     /**
      * 모든 일기 가져오기
+     *
+     * M9 페이지네이션: options.limit / options.offset 지원.
+     * 기본은 후방 호환을 위해 전체 로드(과거 동작 유지). 호출자가 페이지 크기 지정 권장.
      */
-    async getAllEntries() {
+    async getAllEntries(options = {}) {
         if (!this.isConnected()) throw new Error('Supabase가 연결되지 않았습니다.');
         if (!this.user) throw new Error('로그인이 필요합니다.');
 
-        const { data, error } = await supabaseClient
+        let query = supabaseClient
             .from('diary_entries')
             .select('*')
             .eq('user_id', this.user.id)
             .order('date', { ascending: false });
+
+        if (typeof options.limit === 'number') {
+            const from = options.offset || 0;
+            query = query.range(from, from + options.limit - 1);
+        }
+
+        const { data, error } = await query;
 
         if (error) throw error;
         return (data || []).map(entry => this.toLocalFormat(entry));
@@ -259,20 +301,21 @@ class SupabaseStorage {
 
     /**
      * 일기 검색
+     *
+     * C7: PostgREST `.or()` 메타문자(`,()`)와 ilike 와일드카드(`% _`)를 모두 escape해
+     * 사용자 입력으로 추가 필터 절을 주입할 수 없도록 한다.
      */
     async searchEntries(query) {
         if (!this.isConnected()) throw new Error('Supabase가 연결되지 않았습니다.');
         if (!this.user) throw new Error('로그인이 필요합니다.');
 
-        const lowerQuery = query.toLowerCase();
+        const safe = escapePostgRESTValue(query);
 
-        // 텍스트 검색 (Supabase의 기본 텍스트 필터 사용)
-        // 실제 운영 환경에서는 Full Text Search 기능이나 임베딩 벡터 검색을 사용하는 것이 좋습니다.
         const { data, error } = await supabaseClient
             .from('diary_entries')
             .select('*')
             .eq('user_id', this.user.id)
-            .or(`content.ilike.%${query}%,daily_comment.ilike.%${query}%`)
+            .or(`content.ilike.%${safe}%,daily_comment.ilike.%${safe}%`)
             .order('date', { ascending: false });
 
         if (error) throw error;

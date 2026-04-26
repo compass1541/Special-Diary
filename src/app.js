@@ -15,6 +15,10 @@ export class DiaryApp {
         this.entries = [];
         this.useSupabase = false; // Supabase 사용 여부
 
+        // H5: 현재 편집 중인 항목을 서버에서 가져왔을 때의 updated_at 타임스탬프.
+        //     autoSave/saveEntry가 이 값을 expectedUpdatedAt로 보내면 다른 기기에서 수정된 경우 충돌 감지.
+        this.loadedEntryUpdatedAt = null;
+
         // Link autocomplete state
         this.autocompleteActive = false;
         this.autocompleteQuery = '';
@@ -108,6 +112,14 @@ export class DiaryApp {
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => this.autoSave(), 2000);
             this.handleEditorInput(e); // 링크 자동완성 감지 및 링크된 항목 업데이트
+            // H6: 즉시 드래프트 백업 (브라우저 크래시·저장 실패에도 유실 없음)
+            if (this.selectedDate) {
+                this.saveDraft(
+                    this.formatDateId(this.selectedDate),
+                    diaryContent.value,
+                    document.getElementById('dailyComment').value
+                );
+            }
         });
 
         diaryContent.addEventListener('keydown', (e) => {
@@ -117,6 +129,13 @@ export class DiaryApp {
         document.getElementById('dailyComment').addEventListener('input', () => {
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => this.autoSave(), 2000);
+            if (this.selectedDate) {
+                this.saveDraft(
+                    this.formatDateId(this.selectedDate),
+                    diaryContent.value,
+                    document.getElementById('dailyComment').value
+                );
+            }
         });
 
         // Hide autocomplete on click outside
@@ -134,8 +153,63 @@ export class DiaryApp {
             }
         });
 
+        // Backup / Restore (M6)
+        document.getElementById('exportBtn')?.addEventListener('click', () => this.handleExport());
+        document.getElementById('importBtn')?.addEventListener('click', () => document.getElementById('importFile')?.click());
+        document.getElementById('importFile')?.addEventListener('change', (e) => this.handleImport(e));
+
         // Auth events
         this.bindAuthEvents();
+    }
+
+    // ========================================
+    // M6: Backup / Restore
+    // ========================================
+
+    async handleExport() {
+        try {
+            const currentStorage = this.getStorage();
+            const json = await currentStorage.exportData();
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const stamp = new Date().toISOString().slice(0, 10);
+            a.href = url;
+            a.download = `special-diary-${stamp}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            this.showToast('일기를 JSON으로 내보냈습니다 📥');
+        } catch (err) {
+            console.error('Export failed:', err);
+            this.showToast('내보내기 실패');
+        }
+    }
+
+    async handleImport(e) {
+        const file = e.target.files?.[0];
+        e.target.value = ''; // 같은 파일 재선택 가능하게
+        if (!file) return;
+        if (!confirm('가져온 일기가 같은 날짜의 기존 일기를 덮어쓸 수 있습니다. 계속할까요?')) return;
+        try {
+            const text = await file.text();
+            const entries = JSON.parse(text);
+            if (!Array.isArray(entries)) throw new Error('올바른 백업 파일이 아닙니다');
+            // 로컬 IndexedDB에 가져오고, 클라우드 모드면 그 후 동기화
+            await storage.importData(JSON.stringify(entries));
+            if (this.useSupabase) {
+                const localEntries = await storage.getAllEntries();
+                await supabaseStorage.syncFromLocal(localEntries);
+            }
+            await this.loadEntries();
+            this.renderCalendar();
+            this.renderEntriesList();
+            this.showToast(`${entries.length}개의 일기를 가져왔습니다 📤`);
+        } catch (err) {
+            console.error('Import failed:', err);
+            alert(`가져오기 실패: ${err.message || '알 수 없는 오류'}`);
+        }
     }
 
     bindAuthEvents() {
@@ -173,6 +247,26 @@ export class DiaryApp {
         // Sync buttons
         document.getElementById('syncYes')?.addEventListener('click', () => this.syncLocalToCloud());
         document.getElementById('syncNo')?.addEventListener('click', () => this.closeAuthModal());
+
+        // Password strength indicator (H4)
+        const signupPw = document.getElementById('signupPassword');
+        const strengthEl = document.getElementById('passwordStrength');
+        if (signupPw && strengthEl) {
+            signupPw.addEventListener('input', () => {
+                const pw = signupPw.value;
+                if (!pw) { strengthEl.textContent = ''; return; }
+                let score = 0;
+                if (pw.length >= 8) score++;
+                if (pw.length >= 12) score++;
+                if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+                if (/\d/.test(pw)) score++;
+                if (/[^A-Za-z0-9]/.test(pw)) score++;
+                const labels = ['매우 약함', '약함', '보통', '양호', '강함', '매우 강함'];
+                const colors = ['#ff453a', '#ff453a', '#ffd60a', '#ffd60a', '#30d158', '#30d158'];
+                strengthEl.textContent = `강도: ${labels[score]}`;
+                strengthEl.style.color = colors[score];
+            });
+        }
     }
 
     // ========================================
@@ -198,13 +292,17 @@ export class DiaryApp {
     }
 
     openAuthModal() {
-        document.getElementById('authModal').classList.add('active');
+        const m = document.getElementById('authModal');
+        m.classList.add('active');
+        m.setAttribute('aria-hidden', 'false');
         document.getElementById('loginEmail').focus();
         this.hideAuthError();
     }
 
     closeAuthModal() {
-        document.getElementById('authModal').classList.remove('active');
+        const m = document.getElementById('authModal');
+        m.classList.remove('active');
+        m.setAttribute('aria-hidden', 'true');
         document.getElementById('loginForm').reset();
         document.getElementById('signupForm').reset();
         document.getElementById('syncOption').style.display = 'none';
@@ -312,8 +410,18 @@ export class DiaryApp {
             return;
         }
 
-        if (password.length < 6) {
-            this.showAuthError('비밀번호는 6자 이상이어야 합니다.');
+        if (password.length < 8) {
+            this.showAuthError('비밀번호는 8자 이상이어야 합니다.');
+            return;
+        }
+
+        if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+            this.showAuthError('비밀번호는 영문과 숫자를 모두 포함해야 합니다.');
+            return;
+        }
+
+        if (/^(password|12345678|qwerty|letmein|welcome)/i.test(password)) {
+            this.showAuthError('너무 흔한 비밀번호입니다. 다른 비밀번호를 사용해주세요.');
             return;
         }
 
@@ -405,7 +513,7 @@ export class DiaryApp {
         document.getElementById('calendarTitle').textContent = `${year}년 ${monthNames[month]}`;
 
         const grid = document.getElementById('calendarGrid');
-        grid.innerHTML = '';
+        grid.replaceChildren();
 
         // Day headers
         const dayNames = ['일', '월', '화', '수', '목', '금', '토'];
@@ -476,12 +584,15 @@ export class DiaryApp {
 
     renderEntriesList() {
         const list = document.getElementById('entriesList');
-        list.innerHTML = '';
+        list.replaceChildren();
 
         const recentEntries = this.entries.slice(0, 10);
 
         if (recentEntries.length === 0) {
-            list.innerHTML = '<p style="color: var(--text-tertiary); font-size: 0.875rem; text-align: center; padding: 1rem;">아직 작성된 일기가 없습니다</p>';
+            const empty = document.createElement('p');
+            empty.style.cssText = 'color: var(--text-tertiary); font-size: 0.875rem; text-align: center; padding: 1rem;';
+            empty.textContent = '아직 작성된 일기가 없습니다';
+            list.appendChild(empty);
             return;
         }
 
@@ -497,14 +608,28 @@ export class DiaryApp {
             const timeStr = this.formatTime(entry.createdAt);
             const preview = (entry.content || '').substring(0, 50) + ((entry.content || '').length > 50 ? '...' : '');
 
-            item.innerHTML = `
-                <div class="entry-header">
-                    <div class="entry-date">${dateStr}</div>
-                    <div class="entry-time">${timeStr}</div>
-                </div>
-                <div class="entry-preview">${preview || '내용 없음'}</div>
-                ${entry.dailyComment ? `<div class="entry-comment">"${entry.dailyComment}"</div>` : ''}
-            `;
+            const header = document.createElement('div');
+            header.className = 'entry-header';
+            const dateEl = document.createElement('div');
+            dateEl.className = 'entry-date';
+            dateEl.textContent = dateStr;
+            const timeEl = document.createElement('div');
+            timeEl.className = 'entry-time';
+            timeEl.textContent = timeStr;
+            header.append(dateEl, timeEl);
+
+            const previewEl = document.createElement('div');
+            previewEl.className = 'entry-preview';
+            previewEl.textContent = preview || '내용 없음';
+
+            item.append(header, previewEl);
+
+            if (entry.dailyComment) {
+                const commentEl = document.createElement('div');
+                commentEl.className = 'entry-comment';
+                commentEl.textContent = `"${entry.dailyComment}"`;
+                item.appendChild(commentEl);
+            }
 
             item.addEventListener('click', () => this.selectDate(date));
             list.appendChild(item);
@@ -535,6 +660,9 @@ export class DiaryApp {
         const currentStorage = this.getStorage();
         const entry = await currentStorage.getEntry(dateId);
 
+        // H5: 충돌 감지를 위해 로드 시점의 updated_at 기억
+        this.loadedEntryUpdatedAt = entry?.updatedAt || null;
+
         document.querySelector('.date-day').textContent = day;
         document.querySelector('.date-weekday').textContent = weekday;
         document.querySelector('.date-full').textContent = fullDate;
@@ -545,11 +673,52 @@ export class DiaryApp {
             timeDisplay.textContent = entry ? `작성 시간: ${this.formatTime(entry.createdAt)}` : '';
         }
 
-        document.getElementById('diaryContent').value = entry?.content || '';
-        document.getElementById('dailyComment').value = entry?.dailyComment || '';
+        // H6: localStorage 드래프트 우선 적용 (저장 실패/브라우저 크래시로 유실된 입력 복구)
+        const draft = this.readDraft(dateId);
+        if (draft && (draft.content !== (entry?.content || '') || draft.dailyComment !== (entry?.dailyComment || ''))) {
+            const useDraft = confirm('저장되지 않은 임시 작성 내용이 있습니다. 복구할까요?');
+            if (useDraft) {
+                document.getElementById('diaryContent').value = draft.content || '';
+                document.getElementById('dailyComment').value = draft.dailyComment || '';
+            } else {
+                this.clearDraft(dateId);
+                document.getElementById('diaryContent').value = entry?.content || '';
+                document.getElementById('dailyComment').value = entry?.dailyComment || '';
+            }
+        } else {
+            document.getElementById('diaryContent').value = entry?.content || '';
+            document.getElementById('dailyComment').value = entry?.dailyComment || '';
+        }
 
         // Render linked entries
-        this.renderLinkedEntries(entry?.content || '');
+        this.renderLinkedEntries(document.getElementById('diaryContent').value);
+    }
+
+    // ========================================
+    // H6: localStorage 드래프트 백업/복구
+    // ========================================
+
+    draftKey(dateId) { return `special-diary:draft:${dateId}`; }
+
+    saveDraft(dateId, content, dailyComment) {
+        try {
+            localStorage.setItem(this.draftKey(dateId), JSON.stringify({
+                content, dailyComment, savedAt: Date.now()
+            }));
+        } catch (e) {
+            console.warn('드래프트 저장 실패:', e);
+        }
+    }
+
+    readDraft(dateId) {
+        try {
+            const raw = localStorage.getItem(this.draftKey(dateId));
+            return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+    }
+
+    clearDraft(dateId) {
+        try { localStorage.removeItem(this.draftKey(dateId)); } catch { /* noop */ }
     }
 
     openTodayEntry() {
@@ -572,13 +741,17 @@ export class DiaryApp {
             dailyComment
         };
 
-        const currentStorage = this.getStorage();
-        await currentStorage.saveEntry(entry);
-        await this.loadEntries();
-        this.renderCalendar();
-        this.renderEntriesList();
-
-        this.showToast('일기가 저장되었습니다 ✨');
+        try {
+            const saved = await this.persistEntry(entry);
+            this.loadedEntryUpdatedAt = saved?.updatedAt || Date.now();
+            this.clearDraft(dateId);
+            await this.loadEntries();
+            this.renderCalendar();
+            this.renderEntriesList();
+            this.showToast('일기가 저장되었습니다 ✨');
+        } catch (err) {
+            await this.handleSaveError(err, entry);
+        }
     }
 
     async autoSave() {
@@ -598,11 +771,58 @@ export class DiaryApp {
             dailyComment
         };
 
+        try {
+            const saved = await this.persistEntry(entry);
+            this.loadedEntryUpdatedAt = saved?.updatedAt || Date.now();
+            this.clearDraft(dateId);
+            await this.loadEntries();
+            this.renderCalendar();
+            this.renderEntriesList();
+        } catch (err) {
+            await this.handleSaveError(err, entry, /* silent */ true);
+        }
+    }
+
+    async persistEntry(entry) {
         const currentStorage = this.getStorage();
-        await currentStorage.saveEntry(entry);
-        await this.loadEntries();
-        this.renderCalendar();
-        this.renderEntriesList();
+        if (this.useSupabase && currentStorage === supabaseStorage) {
+            return await currentStorage.saveEntry(entry, {
+                expectedUpdatedAt: this.loadedEntryUpdatedAt || undefined,
+            });
+        }
+        return await currentStorage.saveEntry(entry);
+    }
+
+    async handleSaveError(err, entry, silent = false) {
+        console.error('Save failed:', err);
+        // 어떤 결과든 드래프트는 보존해 사용자가 잃지 않게 한다.
+        this.saveDraft(entry.id, entry.content, entry.dailyComment);
+
+        if (err && err.code === 'CONFLICT') {
+            const overwrite = confirm('이 일기가 다른 기기에서 수정되었습니다.\n현재 내용으로 덮어쓰시겠습니까?\n(취소: 다른 기기 버전을 다시 불러옴)');
+            if (overwrite) {
+                try {
+                    const saved = await supabaseStorage.saveEntry(entry, { force: true });
+                    this.loadedEntryUpdatedAt = saved?.updatedAt || Date.now();
+                    this.clearDraft(entry.id);
+                    await this.loadEntries();
+                    this.renderCalendar();
+                    this.renderEntriesList();
+                    this.showToast('덮어썼습니다 ✨');
+                    return;
+                } catch (e2) {
+                    console.error('Force save failed:', e2);
+                    this.showToast('덮어쓰기 실패. 드래프트는 보존됩니다.');
+                    return;
+                }
+            } else {
+                await this.selectDate(this.selectedDate);
+                this.showToast('다른 기기 버전을 불러왔습니다');
+                return;
+            }
+        }
+
+        if (!silent) this.showToast('저장 실패. 드래프트는 보존됩니다.');
     }
 
     async deleteEntry() {
@@ -695,7 +915,7 @@ export class DiaryApp {
         }
 
         // Render results
-        list.innerHTML = '';
+        list.replaceChildren();
         this.autocompleteResults.forEach((entry, index) => {
             const date = new Date(entry.date);
             const dateStr = this.formatDisplayDate(date);
@@ -703,10 +923,13 @@ export class DiaryApp {
 
             const item = document.createElement('div');
             item.className = `link-autocomplete-item ${index === this.autocompleteIndex ? 'active' : ''}`;
-            item.innerHTML = `
-                <div class="link-item-date">${dateStr}</div>
-                <div class="link-item-preview">${preview || '내용 없음'}</div>
-            `;
+            const itemDate = document.createElement('div');
+            itemDate.className = 'link-item-date';
+            itemDate.textContent = dateStr;
+            const itemPreview = document.createElement('div');
+            itemPreview.className = 'link-item-preview';
+            itemPreview.textContent = preview || '내용 없음';
+            item.append(itemDate, itemPreview);
 
             item.addEventListener('mouseenter', () => {
                 this.autocompleteIndex = index;
@@ -803,11 +1026,34 @@ export class DiaryApp {
             return;
         }
 
-        listContainer.innerHTML = '';
+        listContainer.replaceChildren();
         let hasValidLinks = false;
 
+        const SVG_NS = 'http://www.w3.org/2000/svg';
+        const buildCalendarIcon = () => {
+            const svg = document.createElementNS(SVG_NS, 'svg');
+            svg.setAttribute('width', '12');
+            svg.setAttribute('height', '12');
+            svg.setAttribute('viewBox', '0 0 24 24');
+            svg.setAttribute('fill', 'none');
+            svg.setAttribute('stroke', 'currentColor');
+            svg.setAttribute('stroke-width', '2');
+            svg.setAttribute('aria-hidden', 'true');
+            const shapes = [
+                ['rect', { x: '3', y: '4', width: '18', height: '18', rx: '2', ry: '2' }],
+                ['line', { x1: '16', y1: '2', x2: '16', y2: '6' }],
+                ['line', { x1: '8', y1: '2', x2: '8', y2: '6' }],
+                ['line', { x1: '3', y1: '10', x2: '21', y2: '10' }],
+            ];
+            for (const [tag, attrs] of shapes) {
+                const el = document.createElementNS(SVG_NS, tag);
+                for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+                svg.appendChild(el);
+            }
+            return svg;
+        };
+
         linkedDateIds.forEach(dateId => {
-            // Find if entry exists
             const entry = this.entries.find(e => e.id === dateId);
             if (entry) {
                 hasValidLinks = true;
@@ -815,15 +1061,10 @@ export class DiaryApp {
                 pill.className = 'linked-entry-pill';
 
                 const date = new Date(entry.date);
-                pill.innerHTML = `
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
-                        <line x1="16" y1="2" x2="16" y2="6"></line>
-                        <line x1="8" y1="2" x2="8" y2="6"></line>
-                        <line x1="3" y1="10" x2="21" y2="10"></line>
-                    </svg>
-                    <span>${this.formatDisplayDate(date)}</span>
-                `;
+                pill.appendChild(buildCalendarIcon());
+                const span = document.createElement('span');
+                span.textContent = this.formatDisplayDate(date);
+                pill.appendChild(span);
 
                 pill.addEventListener('click', () => {
                     this.selectDate(date);
@@ -845,14 +1086,18 @@ export class DiaryApp {
     // ========================================
 
     openAISearchModal() {
-        document.getElementById('aiSearchModal').classList.add('active');
+        const m = document.getElementById('aiSearchModal');
+        m.classList.add('active');
+        m.setAttribute('aria-hidden', 'false');
         document.getElementById('aiSearchInput').focus();
     }
 
     closeAISearchModal() {
-        document.getElementById('aiSearchModal').classList.remove('active');
+        const m = document.getElementById('aiSearchModal');
+        m.classList.remove('active');
+        m.setAttribute('aria-hidden', 'true');
         document.getElementById('aiSearchInput').value = '';
-        document.getElementById('aiSearchResults').innerHTML = '';
+        document.getElementById('aiSearchResults').replaceChildren();
     }
 
     async performAISearch() {
@@ -860,13 +1105,17 @@ export class DiaryApp {
         if (!query) return;
 
         const resultsContainer = document.getElementById('aiSearchResults');
-        resultsContainer.innerHTML = '<div class="ai-loading">AI가 일기를 검색하고 있습니다...</div>';
+        resultsContainer.replaceChildren();
+        const loading = document.createElement('div');
+        loading.className = 'ai-loading';
+        loading.textContent = 'AI가 일기를 검색하고 있습니다...';
+        resultsContainer.appendChild(loading);
 
         try {
             const searchResult = await gemini.searchDiaries(query, this.entries);
 
             if (searchResult.results && searchResult.results.length > 0) {
-                resultsContainer.innerHTML = '';
+                resultsContainer.replaceChildren();
 
                 if (searchResult.summary) {
                     const summaryDiv = document.createElement('div');
@@ -884,11 +1133,20 @@ export class DiaryApp {
 
                     const item = document.createElement('div');
                     item.className = 'search-result-item';
-                    item.innerHTML = `
-                        <div class="search-result-date">${dateStr}</div>
-                        <div class="search-result-content">${(entry.content || '').substring(0, 150)}...</div>
-                        <div style="font-size: 0.8125rem; color: var(--accent); margin-top: 8px;">💡 ${result.reason}</div>
-                    `;
+
+                    const dateEl = document.createElement('div');
+                    dateEl.className = 'search-result-date';
+                    dateEl.textContent = dateStr;
+
+                    const contentEl = document.createElement('div');
+                    contentEl.className = 'search-result-content';
+                    contentEl.textContent = (entry.content || '').substring(0, 150) + '...';
+
+                    const reasonEl = document.createElement('div');
+                    reasonEl.style.cssText = 'font-size: 0.8125rem; color: var(--accent); margin-top: 8px;';
+                    reasonEl.textContent = `💡 ${result.reason || ''}`;
+
+                    item.append(dateEl, contentEl, reasonEl);
 
                     item.addEventListener('click', () => {
                         this.closeAISearchModal();
@@ -898,52 +1156,73 @@ export class DiaryApp {
                     resultsContainer.appendChild(item);
                 }
             } else {
-                resultsContainer.innerHTML = `
-                    <div style="text-align: center; padding: 32px; color: var(--text-secondary);">
-                        <p>${searchResult.message || '관련된 일기를 찾지 못했습니다.'}</p>
-                    </div>
-                `;
+                resultsContainer.replaceChildren();
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'text-align: center; padding: 32px; color: var(--text-secondary);';
+                const p = document.createElement('p');
+                p.textContent = searchResult.message || '관련된 일기를 찾지 못했습니다.';
+                wrap.appendChild(p);
+                resultsContainer.appendChild(wrap);
             }
         } catch (error) {
-            resultsContainer.innerHTML = `
-                <div style="text-align: center; padding: 32px; color: var(--danger);">
-                    <p>검색 중 오류가 발생했습니다.</p>
-                    <p style="font-size: 0.8125rem; margin-top: 8px;">${error.message}</p>
-                </div>
-            `;
+            console.error('AI search error:', error);
+            resultsContainer.replaceChildren();
+            const wrap = document.createElement('div');
+            wrap.style.cssText = 'text-align: center; padding: 32px; color: var(--danger);';
+            const p = document.createElement('p');
+            p.textContent = '검색 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+            wrap.appendChild(p);
+            resultsContainer.appendChild(wrap);
         }
     }
 
     async showAISuggestions() {
-        document.getElementById('aiSuggestionModal').classList.add('active');
+        const modal = document.getElementById('aiSuggestionModal');
+        modal.classList.add('active');
+        modal.setAttribute('aria-hidden', 'false');
 
         const contentDiv = document.getElementById('aiSuggestionContent');
-        contentDiv.innerHTML = '<div class="ai-loading">AI가 제안을 생성하고 있습니다...</div>';
+        contentDiv.replaceChildren();
+        const loading = document.createElement('div');
+        loading.className = 'ai-loading';
+        loading.textContent = 'AI가 제안을 생성하고 있습니다...';
+        contentDiv.appendChild(loading);
 
         try {
             const currentContent = document.getElementById('diaryContent').value;
             const suggestions = await gemini.getSuggestions(currentContent, this.entries);
 
-            // Format suggestions with styling
-            const formattedSuggestions = suggestions
-                .split('\n')
-                .filter(line => line.trim())
-                .map(line => `<div class="suggestion-item">${line}</div>`)
-                .join('');
+            const lines = (suggestions || '').split('\n').filter(line => line.trim());
+            contentDiv.replaceChildren();
 
-            contentDiv.innerHTML = formattedSuggestions || '<p>제안을 생성할 수 없습니다.</p>';
+            if (lines.length === 0) {
+                const empty = document.createElement('p');
+                empty.textContent = '제안을 생성할 수 없습니다.';
+                contentDiv.appendChild(empty);
+            } else {
+                for (const line of lines) {
+                    const div = document.createElement('div');
+                    div.className = 'suggestion-item';
+                    div.textContent = line;
+                    contentDiv.appendChild(div);
+                }
+            }
         } catch (error) {
-            contentDiv.innerHTML = `
-                <div style="color: var(--danger);">
-                    <p>제안을 가져오는 중 오류가 발생했습니다.</p>
-                    <p style="font-size: 0.875rem; margin-top: 8px;">${error.message}</p>
-                </div>
-            `;
+            console.error('AI suggestion error:', error);
+            contentDiv.replaceChildren();
+            const wrap = document.createElement('div');
+            wrap.style.color = 'var(--danger)';
+            const p = document.createElement('p');
+            p.textContent = '제안을 가져오는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+            wrap.appendChild(p);
+            contentDiv.appendChild(wrap);
         }
     }
 
     closeAISuggestionModal() {
-        document.getElementById('aiSuggestionModal').classList.remove('active');
+        const m = document.getElementById('aiSuggestionModal');
+        m.classList.remove('active');
+        m.setAttribute('aria-hidden', 'true');
     }
 
     // ========================================
@@ -988,13 +1267,17 @@ export class DiaryApp {
     // ========================================
 
     openGraphViewModal() {
-        document.getElementById('graphViewModal').classList.add('active');
+        const m = document.getElementById('graphViewModal');
+        m.classList.add('active');
+        m.setAttribute('aria-hidden', 'false');
         // Small delay to ensure the modal is displayed and has valid dimensions
         setTimeout(() => this.renderGraphView(), 100);
     }
 
     closeGraphViewModal() {
-        document.getElementById('graphViewModal').classList.remove('active');
+        const m = document.getElementById('graphViewModal');
+        m.classList.remove('active');
+        m.setAttribute('aria-hidden', 'true');
         if (this.graph) {
             this.graph._destructor();
             this.graph = null;
@@ -1003,11 +1286,14 @@ export class DiaryApp {
 
     renderGraphView() {
         const graphContainer = document.getElementById('3d-graph');
-        graphContainer.innerHTML = '';
+        graphContainer.replaceChildren();
         const tooltip = document.getElementById('graphTooltip');
 
         if (this.entries.length === 0) {
-            graphContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);">일기가 없습니다.</div>';
+            const empty = document.createElement('div');
+            empty.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);';
+            empty.textContent = '일기가 없습니다.';
+            graphContainer.appendChild(empty);
             return;
         }
 
@@ -1050,46 +1336,48 @@ export class DiaryApp {
             });
         });
 
-        // Basic keyword extraction & clustering logic
-        // In a real app, this should rely on real NLP or embeddings (e.g. from Gemini)
+        // M8: 키워드 기반 implicit 링크. 역인덱스로 O(n²) → O(n + total_postings)로 축소.
+        // 같은 키워드를 공유하는 엔트리 쌍에만 카운트를 누적해 sharedCount >= 3인 쌍을 찾는다.
+        const STOPWORDS = new Set([
+            '있다', '없다', '하다', '되다', '그리고', '하지만', '나는', '내가', '너무',
+            '오늘', '어제', '내일', '정말', '진짜', '같은', '많이', '조금', 'about', 'with',
+            'this', 'that', 'have', 'they', 'from', 'were', 'been', 'their', 'would',
+        ]);
         const getKeywords = (text) => {
-            if (!text) return new Set();
-            // Remove special chars, split by space, keep words > 1 char
+            if (!text) return [];
             const words = text.replace(/[^\w\s가-힣]/g, '').toLowerCase().split(/\s+/);
-            return new Set(words.filter(w => w.length > 1));
+            return [...new Set(words.filter(w => w.length > 1 && !STOPWORDS.has(w)))];
         };
 
-        const entryKeywords = new Map();
-        this.entries.forEach(entry => {
-            entryKeywords.set(entry.id, getKeywords(entry.content));
-        });
+        const inverted = new Map(); // keyword -> [entryId, ...]
+        for (const entry of this.entries) {
+            for (const k of getKeywords(entry.content)) {
+                let arr = inverted.get(k);
+                if (!arr) { arr = []; inverted.set(k, arr); }
+                arr.push(entry.id);
+            }
+        }
 
-        // Add implicit keyword-based links (connect entries with >= 3 shared words)
-        for (let i = 0; i < this.entries.length; i++) {
-            for (let j = i + 1; j < this.entries.length; j++) {
-                const entryA = this.entries[i];
-                const entryB = this.entries[j];
-                const keywordsA = entryKeywords.get(entryA.id);
-                const keywordsB = entryKeywords.get(entryB.id);
-
-                let sharedCount = 0;
-                keywordsA.forEach(k => { if (keywordsB.has(k)) sharedCount++; });
-
-                // If they share 3 or more meaningful common words, link them implicitly
-                if (sharedCount >= 3) {
-                    links.push({
-                        source: entryA.id,
-                        target: entryB.id,
-                        implicit: true // Marker for weaker connection styling later if needed
-                    });
-
-                    // Slightly increase node size to highlight heavily related topics
-                    const sourceNode = nodes.find(n => n.id === entryA.id);
-                    const targetNode = nodes.find(n => n.id === entryB.id);
-                    if (sourceNode) sourceNode.val += 0.2;
-                    if (targetNode) targetNode.val += 0.2;
+        const pairCount = new Map(); // "a||b" (a < b) -> shared keyword count
+        for (const ids of inverted.values()) {
+            if (ids.length < 2 || ids.length > 50) continue; // 너무 흔한 단어는 그래프 가독성 해침
+            for (let i = 0; i < ids.length; i++) {
+                for (let j = i + 1; j < ids.length; j++) {
+                    const a = ids[i], b = ids[j];
+                    const key = a < b ? `${a}||${b}` : `${b}||${a}`;
+                    pairCount.set(key, (pairCount.get(key) || 0) + 1);
                 }
             }
+        }
+
+        for (const [key, count] of pairCount) {
+            if (count < 3) continue;
+            const [a, b] = key.split('||');
+            links.push({ source: a, target: b, implicit: true });
+            const sourceNode = nodes.find(n => n.id === a);
+            const targetNode = nodes.find(n => n.id === b);
+            if (sourceNode) sourceNode.val += 0.2;
+            if (targetNode) targetNode.val += 0.2;
         }
 
         const graphData = { nodes, links };
@@ -1133,7 +1421,13 @@ export class DiaryApp {
             .onNodeHover(node => {
                 graphContainer.style.cursor = node ? 'pointer' : null;
                 if (node) {
-                    tooltip.innerHTML = `<strong>${node.name}</strong><br/>${node.content}`;
+                    tooltip.replaceChildren();
+                    const strongEl = document.createElement('strong');
+                    strongEl.textContent = node.name;
+                    const contentEl = document.createElement('div');
+                    contentEl.style.cssText = 'white-space: pre-line; margin-top: 4px;';
+                    contentEl.textContent = node.content;
+                    tooltip.append(strongEl, contentEl);
                     tooltip.style.display = 'block';
                 } else {
                     tooltip.style.display = 'none';

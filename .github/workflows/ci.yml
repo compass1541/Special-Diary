@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        env:
+          # CI 빌드는 placeholder 키를 사용 — 실제 키는 .env에서만 읽힘.
+          # 프로덕션 배포 시에는 호스팅(Vercel/Netlify) 환경 변수에서 주입.
+          VITE_SUPABASE_URL: https://example.supabase.co
+          VITE_SUPABASE_ANON_KEY: your-anon-key
+          VITE_GEMINI_API_KEY: ''
+        run: npm run build
+
+      - name: Verify no Gemini key in build output
+        # C6 회귀 방지: VITE_GEMINI_API_KEY가 빈 값이면 빌드 산출물에도 진짜 키 패턴이 없어야 함.
+        run: |
+          if grep -RE 'AIza[0-9A-Za-z_-]{20,}' dist/ > /dev/null; then
+            echo "::error::Gemini API key pattern detected in dist/ — Edge Function 우회 또는 키 노출 의심"
+            exit 1
+          fi

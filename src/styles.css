@@ -1335,7 +1335,8 @@ body {
     /* Clean, modern, solid dark background */
 }
 
-#3d-graph {
+/* CSS ID 시작이 숫자라 \33 (= "3"의 CSS 이스케이프)로 escape — DOM id="3d-graph"는 그대로 매칭됨 */
+#\33 d-graph {
     width: 100%;
     height: 100%;
 }
