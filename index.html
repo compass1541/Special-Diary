@@ -280,18 +280,55 @@
 
     <!-- 3D Graph Modal -->
     <div class="modal-overlay" id="graphViewModal" role="dialog" aria-modal="true" aria-labelledby="graphViewTitle" aria-hidden="true">
-        <div class="modal graph-modal" style="width: 90vw; max-width: 1200px; height: 90vh; max-height: none;">
+        <div class="modal graph-modal" style="width: 95vw; max-width: 1400px; height: 92vh; max-height: none;">
             <div class="modal-header">
                 <h2 id="graphViewTitle">일기 3D 연결망</h2>
+                <div class="graph-controls">
+                    <input type="search" class="graph-search" id="graphSearch"
+                        placeholder="키워드 / 날짜로 검색..." aria-label="그래프 노드 검색">
+                    <div class="graph-filter" role="group" aria-label="링크 종류 필터">
+                        <button class="graph-filter-btn active" data-filter="all">전체</button>
+                        <button class="graph-filter-btn" data-filter="explicit">명시적만</button>
+                        <button class="graph-filter-btn" data-filter="implicit">키워드만</button>
+                        <button class="graph-filter-btn" data-filter="chronology">시간순만</button>
+                    </div>
+                </div>
                 <button class="modal-close" id="closeGraphView" aria-label="연결망 보기 닫기">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
                         <path d="M18 6 6 18M6 6l12 12"></path>
                     </svg>
                 </button>
             </div>
-            <div class="modal-body" style="padding: 0; overflow: hidden; position: relative;">
-                <div id="3d-graph" style="width: 100%; height: 100%;" role="img" aria-label="일기 간 연결망 그래프"></div>
-                <div class="graph-tooltip" id="graphTooltip" role="tooltip"></div>
+            <div class="modal-body graph-modal-body">
+                <div class="graph-canvas-wrap">
+                    <div id="3d-graph" role="img" aria-label="일기 간 3D 연결망 그래프"></div>
+                    <div class="graph-loading" id="graphLoading">3D 엔진 로딩 중...</div>
+                    <div class="graph-stats" id="graphStats"></div>
+                    <div class="graph-legend" aria-label="범례">
+                        <div class="legend-item"><span class="legend-line legend-line-explicit"></span>명시적 링크 [[ ]]</div>
+                        <div class="legend-item"><span class="legend-line legend-line-implicit"></span>공유 키워드 (3개+)</div>
+                        <div class="legend-item"><span class="legend-line legend-line-chronology"></span>시간순 인접 (≤30일)</div>
+                        <div class="legend-item"><span class="legend-dot" style="background: hsl(200, 70%, 60%);"></span>색상 = 주제 클러스터</div>
+                    </div>
+                </div>
+                <aside class="graph-sidepanel" id="graphSidepanel" aria-live="polite">
+                    <div class="graph-sidepanel-empty" id="graphSidepanelEmpty">
+                        <p>노드를 클릭하면 일기 정보가 표시됩니다.</p>
+                        <p style="font-size: 0.8125rem; color: var(--text-tertiary); margin-top: 12px;">
+                            마우스 드래그로 회전, 휠로 확대/축소
+                        </p>
+                    </div>
+                    <div class="graph-sidepanel-detail" id="graphSidepanelDetail" style="display: none;">
+                        <div class="graph-sp-date" id="spDate"></div>
+                        <div class="graph-sp-content" id="spContent"></div>
+                        <div class="graph-sp-meta">
+                            <span id="spExplicitCount" title="명시적 링크 수">↗ 0</span>
+                            <span id="spImplicitCount" title="키워드 링크 수">≈ 0</span>
+                        </div>
+                        <div class="graph-sp-keywords" id="spKeywords"></div>
+                        <button class="graph-sp-open" id="spOpenInEditor">편집기에서 열기</button>
+                    </div>
+                </aside>
             </div>
         </div>
     </div>

@@ -180,10 +180,11 @@ class SupabaseStorage {
         }
 
         const now = new Date().toISOString();
-        // user_id는 DB에서 DEFAULT auth.uid()로 자동 부여되므로 클라이언트가 보내지 않는다 (M2).
-        // RLS WITH CHECK (user_id = auth.uid())가 위조를 차단한다.
+        // user_id는 DB에서 DEFAULT auth.uid()로 부여되지만, upsert의 onConflict 조건에 
+        // user_id가 포함되어 있으므로 클라이언트에서 명시적으로 보내야 한다 (C1, M2).
         const entryData = {
             id: entry.id,  // 날짜 ID (YYYY-MM-DD)
+            user_id: this.user.id, // RLS 및 upsert 충돌 해결을 위해 명시적으로 포함
             date: entry.date,
             content: entry.content || '',
             daily_comment: entry.dailyComment || '',
