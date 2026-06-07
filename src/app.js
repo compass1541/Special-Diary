@@ -74,6 +74,7 @@ export class DiaryApp {
         document.getElementById('newEntryBtn').addEventListener('click', () => this.openTodayEntry());
 
         // Editor actions
+        document.getElementById('closeEditorBtn').addEventListener('click', () => this.closeEditor());
         document.getElementById('saveBtn').addEventListener('click', () => this.saveEntry());
         document.getElementById('deleteBtn').addEventListener('click', () => this.deleteEntry());
         document.getElementById('aiSuggestBtn').addEventListener('click', () => this.showAISuggestions());
@@ -647,6 +648,7 @@ export class DiaryApp {
         this.renderEntriesList();
 
         // Show editor
+        document.querySelector('.app-container').classList.add('editor-active');
         document.getElementById('emptyState').style.display = 'none';
         document.getElementById('editor').style.display = 'flex';
 
@@ -720,6 +722,15 @@ export class DiaryApp {
 
     clearDraft(dateId) {
         try { localStorage.removeItem(this.draftKey(dateId)); } catch { /* noop */ }
+    }
+
+    closeEditor() {
+        document.querySelector('.app-container').classList.remove('editor-active');
+        document.getElementById('emptyState').style.display = 'flex';
+        document.getElementById('editor').style.display = 'none';
+        this.selectedDate = null;
+        this.renderCalendar();
+        this.renderEntriesList();
     }
 
     openTodayEntry() {
