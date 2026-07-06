@@ -284,6 +284,10 @@ export class GraphView {
             controls.zoomSpeed = 1.1;
             controls.autoRotate = this.state.autoRotate;
             controls.autoRotateSpeed = 0.5;
+            // 줌 클램프: 스타필드 셸(1300~3500) 밖으로 나가면 배경 별이
+            // 중앙에 뭉친 "점 구름"으로 보여 데이터로 오해된다. 셸 안쪽까지만 허용.
+            controls.minDistance = 20;
+            controls.maxDistance = 2600;
         } catch (err) {
             console.warn('컨트롤 튜닝 실패:', err);
         }
