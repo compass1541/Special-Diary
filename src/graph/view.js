@@ -4,17 +4,17 @@
  * app.js에서 분리된 그래프 전담 모듈. 데이터 계산은 ./data.js(순수 함수)에 위임하고
  * 여기서는 렌더링·상호작용만 담당한다.
  *
- * 주요 기능:
- *   - 키워드 허브 노드(옥타헤드론) + 일기 노드(구) 2-모드 그래프
- *   - UnrealBloom 글로우 (노드 300개 초과 시 기본 꺼짐, 토글 가능)
- *   - 스마트 라벨: 허브·선택·이웃·검색 매치만 표시 ("전체" 토글 가능)
- *   - 레이아웃: 자유(force) ↔ 시간 나선(날짜순 헬릭스)
- *   - 클러스터 범례 스포트라이트, 노드 포커스(카메라 플라이 + 이웃 발광)
- *   - 사이드패널: 일기 상세 / 키워드 허브 상세 / 관련 일기 / 분신에게 묻기
+ * 조작감:
+ *   - Orbit 컨트롤(위가 항상 위) + 관성 댐핑 + 유휴 시 시네마틱 자동 회전
+ *   - 내비 HUD(확대/축소/전체 보기/회전 토글), 노드 호버 확대 반응, ESC/칩으로 포커스 해제
+ * 비주얼:
+ *   - 스타필드 + 지수 안개(깊이감), UnrealBloom 글로우
+ *   - 일기 노드 = 발광 구체 + 가산합성 헤일로(항성), 키워드 허브 = 회전 링을 두른 옥타헤드론
+ *   - 스마트 라벨(허브·선택·이웃·검색 매치만), 자유 ↔ 시간 나선 레이아웃, 클러스터 스포트라이트
  */
 import { buildGraphData, helixPositions, relatedEntries } from './data.js';
 
-const DIM_NODE = 'rgba(120, 124, 140, 0.13)';
+const DIM_EMISSIVE = '#23252e';
 
 const LINK_STYLE = {
     explicit: {
@@ -32,6 +32,7 @@ const LINK_STYLE = {
 };
 
 const idOf = (x) => (typeof x === 'object' && x !== null ? x.id : x);
+const entryRadius = (node) => 4 * Math.cbrt(Math.min(node.val, 12));
 
 export class GraphView {
     /**
@@ -51,6 +52,13 @@ export class GraphView {
         this.bloomPass = null;
         this.resizeObserver = null;
         this._escHandler = null;
+        this._libs = null;        // { THREE, SpriteText } — dynamic import 후 보관
+        this._haloTex = null;
+        this._starfield = null;
+        this._fxRaf = null;
+        this._userInteracted = false;
+        this._autoFitTimer = null;
+        this.hoveredId = null;
 
         this.state = {
             filter: 'all',        // all | explicit | keyword | chronology
@@ -60,6 +68,7 @@ export class GraphView {
             layout: 'free',       // free | helix
             bloom: true,
             labels: 'smart',      // smart | all
+            autoRotate: true,
         };
 
         this._bindControls();
@@ -82,8 +91,12 @@ export class GraphView {
         this.state.spotlightCluster = null;
         this.state.layout = 'free';
         this.state.labels = 'smart';
+        this.state.autoRotate = true;
+        this.hoveredId = null;
+        this._userInteracted = false;
         this._syncToolbar();
         this._showEmpty();
+        this._setFocusExit(false);
 
         this._escHandler = (e) => {
             if (e.key !== 'Escape') return;
@@ -111,6 +124,8 @@ export class GraphView {
     }
 
     _teardownGraph() {
+        if (this._fxRaf) { cancelAnimationFrame(this._fxRaf); this._fxRaf = null; }
+        if (this._autoFitTimer) { clearTimeout(this._autoFitTimer); this._autoFitTimer = null; }
         if (this.graph) {
             try { this.graph._destructor(); } catch { /* noop */ }
             this.graph = null;
@@ -120,9 +135,12 @@ export class GraphView {
             this.resizeObserver = null;
         }
         this.bloomPass = null;
+        this._starfield = null;
+        this._haloTex = null;
         this.data = null;
         this.nodeById = new Map();
         this.adjacency = new Map();
+        this.hoveredId = null;
     }
 
     // ========================================
@@ -148,7 +166,7 @@ export class GraphView {
 
         // 3D 엔진 lazy-load — 초기 번들에 포함되지 않게 유지
         loadingEl.classList.remove('hidden');
-        loadingEl.textContent = '3D 엔진 로딩 중...';
+        loadingEl.textContent = '우주 생성 중…';
         let ForceGraph3D, SpriteText, THREE, UnrealBloomPass;
         try {
             const [graphMod, spriteMod, threeMod, bloomMod] = await Promise.all([
@@ -166,6 +184,7 @@ export class GraphView {
             loadingEl.textContent = '3D 엔진 로드 실패. 네트워크를 확인하세요.';
             return;
         }
+        this._libs = { THREE, SpriteText };
 
         // ---- 데이터 구성 (순수 함수)
         this.data = buildGraphData(this.entries);
@@ -185,32 +204,36 @@ export class GraphView {
         // 노드가 많으면 bloom 기본 OFF (토글로 켤 수 있음)
         this.state.bloom = this.data.nodes.length <= 300;
 
-        // ---- 그래프 생성
-        const graph = ForceGraph3D()(container)
+        // ---- 그래프 생성 (orbit: 위가 항상 위 — 직관적인 회전)
+        const graph = ForceGraph3D({
+            controlType: 'orbit',
+            rendererConfig: { antialias: true, powerPreference: 'high-performance' },
+        })(container)
             .backgroundColor('#05060f')
             .graphData({ nodes: this.data.nodes, links: this.data.links })
             .nodeLabel(node => node.kind === 'keyword' ? `#${node.name} · 일기 ${node.count}개` : node.name)
-            .nodeRelSize(4)
-            .nodeVal(node => Math.min(node.val, 12))
-            .nodeColor(node => this._nodeColor(node))
-            .nodeOpacity(0.92)
-            .nodeResolution(12)
             .linkColor(link => this._linkColor(link))
             .linkWidth(link => this._linkWidth(link))
             .linkOpacity(1.0) // 투명도는 rgba 알파로만 제어
             .linkDirectionalParticles(link => {
                 if (!this._linkPassesFilter(link)) return 0;
-                if (link.type !== 'explicit') return 0;
-                return this._linkState(link) === 'bright' ? 4 : 2;
+                const bright = this._linkState(link) === 'bright';
+                if (link.type === 'explicit') return bright ? 4 : 2;
+                if (link.type === 'keyword') return bright ? 2 : 0;
+                return 0;
             })
             .linkDirectionalParticleSpeed(0.006)
             .linkDirectionalParticleWidth(1.8)
-            .linkDirectionalParticleColor(() => 'rgba(150, 215, 255, 0.95)')
-            .nodeThreeObjectExtend(node => node.kind === 'entry')
-            .nodeThreeObject(node => this._nodeObject(node, { THREE, SpriteText }))
+            .linkDirectionalParticleColor(link =>
+                link.type === 'keyword' ? 'rgba(255, 226, 160, 0.95)' : 'rgba(150, 215, 255, 0.95)')
+            .nodeThreeObjectExtend(false)
+            .nodeThreeObject(node => this._nodeObject(node))
             .onNodeClick(node => this._handleNodeClick(node))
             .onBackgroundClick(() => this._clearSelection())
-            .onNodeHover(node => { container.style.cursor = node ? 'pointer' : null; })
+            .onNodeHover(node => {
+                this.hoveredId = node ? node.id : null;
+                container.style.cursor = node ? 'pointer' : null;
+            })
             .cooldownTicks(140)
             .warmupTicks(30);
 
@@ -228,11 +251,21 @@ export class GraphView {
                 return 0.3;
             });
 
+        // ---- 우주 배경: 스타필드 + 깊이 안개
+        try {
+            const scene = graph.scene();
+            scene.fog = new THREE.FogExp2(0x05060f, 0.00042);
+            this._starfield = this._makeStarfield(THREE);
+            scene.add(this._starfield);
+        } catch (err) {
+            console.warn('스타필드 초기화 실패:', err);
+        }
+
         // ---- Bloom 글로우
         try {
             const { clientWidth: w, clientHeight: h } = container;
             this.bloomPass = new UnrealBloomPass(
-                new THREE.Vector2(Math.max(w, 2), Math.max(h, 2)), 1.05, 0.55, 0.12
+                new THREE.Vector2(Math.max(w, 2), Math.max(h, 2)), 1.0, 0.55, 0.15
             );
             this.bloomPass.enabled = this.state.bloom;
             graph.postProcessingComposer().addPass(this.bloomPass);
@@ -241,6 +274,25 @@ export class GraphView {
             this.bloomPass = null;
         }
         this._syncToolbar();
+
+        // ---- Orbit 컨트롤 튜닝: 관성 + 유휴 시 시네마틱 자동 회전
+        try {
+            const controls = graph.controls();
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.08;
+            controls.rotateSpeed = 0.85;
+            controls.zoomSpeed = 1.1;
+            controls.autoRotate = this.state.autoRotate;
+            controls.autoRotateSpeed = 0.5;
+        } catch (err) {
+            console.warn('컨트롤 튜닝 실패:', err);
+        }
+
+        // 사용자가 처음 만지는 순간 자동 회전 정지 (원하면 HUD ⟳로 다시 켠다)
+        container.addEventListener('pointerdown', () => {
+            this._userInteracted = true;
+            if (this.state.autoRotate) this._setAutoRotate(false);
+        }, { once: false });
 
         // 첫 프레임 후 로딩 제거
         graph.onEngineTick(() => {
@@ -257,9 +309,13 @@ export class GraphView {
             }
         }, 80);
 
-        // 레이아웃은 open()에서 'free'로 초기화되므로 여기서 별도 적용 불필요.
-        // (엔진 초기화 전 d3ReheatSimulation() 호출은 tick 오류를 일으킨다.)
+        // 레이아웃이 안정된 뒤, 아직 조작 전이면 화면에 꽉 차게 맞춤
+        this._autoFitTimer = setTimeout(() => {
+            if (this.graph === graph && !this._userInteracted) graph.zoomToFit(900, 85);
+        }, 2600);
+
         this.graph = graph;
+        this._startFx();
 
         // 모달/창 크기 변화 대응
         if (typeof ResizeObserver !== 'undefined') {
@@ -271,6 +327,104 @@ export class GraphView {
             });
             this.resizeObserver.observe(container);
         }
+    }
+
+    // ========================================
+    // 우주 소품: 스타필드 · 헤일로 텍스처
+    // ========================================
+
+    _makeGlowTexture(THREE, size = 128) {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+        g.addColorStop(0, 'rgba(255,255,255,1)');
+        g.addColorStop(0.35, 'rgba(255,255,255,0.45)');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, size, size);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    _haloTexture(THREE) {
+        if (!this._haloTex) this._haloTex = this._makeGlowTexture(THREE);
+        return this._haloTex;
+    }
+
+    _makeStarfield(THREE) {
+        const COUNT = 1600;
+        const positions = new Float32Array(COUNT * 3);
+        const colors = new Float32Array(COUNT * 3);
+        const tints = [
+            new THREE.Color('#ffffff'),
+            new THREE.Color('#bfe6ff'),
+            new THREE.Color('#d8c8ff'),
+        ];
+        for (let i = 0; i < COUNT; i++) {
+            // 구면 셸에 균일 분포 (노드 영역 바깥, 안개 너머까지)
+            const r = 1300 + Math.random() * 2200;
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i * 3 + 1] = r * Math.cos(phi);
+            positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+            const c = tints[Math.floor(Math.random() * tints.length)];
+            const dim = 0.45 + Math.random() * 0.55;
+            colors[i * 3] = c.r * dim;
+            colors[i * 3 + 1] = c.g * dim;
+            colors[i * 3 + 2] = c.b * dim;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        const mat = new THREE.PointsMaterial({
+            size: 3.2,
+            map: this._makeGlowTexture(THREE, 64),
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.9,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            sizeAttenuation: true,
+        });
+        mat.fog = false; // 별은 안개 너머에서도 반짝이게
+        return new THREE.Points(geo, mat);
+    }
+
+    // ========================================
+    // FX 루프: 허브 링 회전 · 선택 펄스 · 호버 확대 · 별 미세 회전
+    // ========================================
+
+    _startFx() {
+        const tick = () => {
+            this._fxRaf = requestAnimationFrame(tick);
+            const t = performance.now() * 0.001;
+
+            if (this._starfield) this._starfield.rotation.y = t * 0.004;
+
+            if (!this.graph) return;
+            const nodes = this.graph.graphData().nodes;
+            for (const node of nodes) {
+                const obj = node.__threeObj;
+                if (!obj) continue;
+
+                // 허브 링 회전
+                if (node.kind === 'keyword') {
+                    const ring = obj.getObjectByName('hubRing');
+                    if (ring) ring.rotation.z = t * 0.9;
+                    const core = obj.getObjectByName('hubCore');
+                    if (core) core.rotation.y = t * 0.5;
+                }
+
+                // 스케일: 선택 펄스 > 호버 확대 > 기본
+                let target = 1;
+                if (node.id === this.state.selectedId) target = 1.06 + Math.sin(t * 3.2) * 0.07;
+                else if (node.id === this.hoveredId) target = 1.18;
+                const s = obj.scale.x + (target - obj.scale.x) * 0.18;
+                obj.scale.setScalar(s);
+            }
+        };
+        tick();
     }
 
     // ========================================
@@ -319,10 +473,6 @@ export class GraphView {
         return 'normal';
     }
 
-    _nodeColor(node) {
-        return this._nodeState(node) === 'dim' ? DIM_NODE : node.color;
-    }
-
     _linkPassesFilter(link) {
         return this.state.filter === 'all' || link.type === this.state.filter;
     }
@@ -335,8 +485,6 @@ export class GraphView {
         const ss = this._nodeState(s), ts = this._nodeState(t);
         if (ss === 'dim' || ts === 'dim') return 'dim';
         if (ss === 'bright' && ts === 'bright') return 'bright';
-        // 아무 강조도 없는 평상시
-        if (!this.state.selectedId && !this.state.spotlightCluster && !this.state.search.trim()) return 'normal';
         return 'normal';
     }
 
@@ -361,20 +509,56 @@ export class GraphView {
         return false;
     }
 
-    _nodeObject(node, { THREE, SpriteText }) {
+    // ========================================
+    // 노드 3D 오브젝트 (항성 / 허브 스테이션)
+    // ========================================
+
+    _nodeObject(node) {
+        const { THREE, SpriteText } = this._libs;
+        const dim = this._nodeState(node) === 'dim';
+        const group = new THREE.Group();
+
         if (node.kind === 'keyword') {
-            const dim = this._nodeState(node) === 'dim';
             const size = Math.max(3, 1.5 + node.count * 0.55);
-            const group = new THREE.Group();
-            const mesh = new THREE.Mesh(
+
+            const core = new THREE.Mesh(
                 new THREE.OctahedronGeometry(size, 0),
+                new THREE.MeshBasicMaterial({
+                    color: dim ? 0x3a3b42 : 0xffd97a,
+                    transparent: true,
+                    opacity: dim ? 0.12 : 0.95,
+                })
+            );
+            core.name = 'hubCore';
+            group.add(core);
+
+            const ring = new THREE.Mesh(
+                new THREE.TorusGeometry(size * 2.0, size * 0.06, 8, 48),
                 new THREE.MeshBasicMaterial({
                     color: 0xffd97a,
                     transparent: true,
-                    opacity: dim ? 0.10 : 0.95,
+                    opacity: dim ? 0.05 : 0.5,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
                 })
             );
-            group.add(mesh);
+            ring.name = 'hubRing';
+            ring.rotation.x = 1.15;
+            group.add(ring);
+
+            if (!dim) {
+                const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+                    map: this._haloTexture(THREE),
+                    color: 0xffd97a,
+                    transparent: true,
+                    opacity: 0.35,
+                    blending: THREE.AdditiveBlending,
+                    depthWrite: false,
+                }));
+                halo.scale.set(size * 6, size * 6, 1);
+                group.add(halo);
+            }
+
             if (!dim && this._labelVisible(node)) {
                 const label = new SpriteText(`#${node.name}`);
                 label.color = '#ffe9b8';
@@ -384,25 +568,53 @@ export class GraphView {
                 label.fontWeight = '600';
                 label.padding = 1.5;
                 label.borderRadius = 2;
-                label.position.set(0, size + 4, 0);
+                label.position.set(0, size * 2.2 + 4, 0);
                 group.add(label);
             }
             return group;
         }
 
-        // 일기 노드: 기본 구 + (조건부) 라벨 스프라이트
-        if (!this._labelVisible(node)) return undefined;
-        const r = 4 * Math.cbrt(Math.min(node.val, 12));
-        const sprite = new SpriteText(node.name);
-        sprite.color = '#ffffff';
-        sprite.backgroundColor = 'rgba(8, 10, 20, 0.55)';
-        sprite.textHeight = Math.max(4, r * 0.55 + 2.2);
-        sprite.fontFace = 'Inter, -apple-system, sans-serif';
-        sprite.fontWeight = '600';
-        sprite.padding = 2;
-        sprite.borderRadius = 3;
-        sprite.position.set(0, r + 5, 0);
-        return sprite;
+        // 일기 노드: 발광 구체(항성) + 헤일로
+        const r = entryRadius(node);
+        const sphere = new THREE.Mesh(
+            new THREE.SphereGeometry(r, 20, 20),
+            new THREE.MeshPhongMaterial({
+                color: 0x0a0c18,
+                emissive: new THREE.Color(dim ? DIM_EMISSIVE : node.color),
+                emissiveIntensity: dim ? 0.35 : 0.85,
+                shininess: 30,
+                transparent: dim,
+                opacity: dim ? 0.55 : 1,
+            })
+        );
+        group.add(sphere);
+
+        if (!dim) {
+            const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+                map: this._haloTexture(THREE),
+                color: new THREE.Color(node.color),
+                transparent: true,
+                opacity: 0.5,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false,
+            }));
+            halo.scale.set(r * 5.5, r * 5.5, 1);
+            group.add(halo);
+        }
+
+        if (this._labelVisible(node)) {
+            const label = new SpriteText(node.name);
+            label.color = '#ffffff';
+            label.backgroundColor = 'rgba(8, 10, 20, 0.55)';
+            label.textHeight = Math.max(4, r * 0.55 + 2.2);
+            label.fontFace = 'Inter, -apple-system, sans-serif';
+            label.fontWeight = '600';
+            label.padding = 2;
+            label.borderRadius = 3;
+            label.position.set(0, r + 6, 0);
+            group.add(label);
+        }
+        return group;
     }
 
     // ========================================
@@ -416,33 +628,38 @@ export class GraphView {
     _handleNodeClick(node) {
         this.state.selectedId = node.id;
         this.state.spotlightCluster = null;
+        this._setAutoRotate(false);
         this._flyTo(node);
         if (node.kind === 'keyword') {
             this._showHubDetail(node);
         } else {
             this._showEntryDetail(node);
         }
+        this._setFocusExit(true);
         this._refresh();
         this._renderClusterLegend();
     }
 
-    _clearSelection() {
+    _clearSelection({ refit = false } = {}) {
         this.state.selectedId = null;
         this.state.spotlightCluster = null;
         this._showEmpty();
+        this._setFocusExit(false);
         this._refresh();
         this._renderClusterLegend();
+        if (refit && this.graph) this.graph.zoomToFit(800, 85);
     }
 
     _flyTo(node) {
         if (!this.graph || node.x == null) return;
-        const distance = 90;
+        const r = node.kind === 'entry' ? entryRadius(node) : Math.max(3, 1.5 + node.count * 0.55);
+        const distance = 60 + r * 9;
         const dist = Math.hypot(node.x, node.y, node.z) || 1;
         const ratio = 1 + distance / dist;
         this.graph.cameraPosition(
             { x: node.x * ratio + 12, y: node.y * ratio + 14, z: node.z * ratio },
             { x: node.x, y: node.y, z: node.z },
-            1100
+            1300
         );
     }
 
@@ -450,6 +667,33 @@ export class GraphView {
     _jumpToNode(nodeId) {
         const liveNode = this.graph?.graphData().nodes.find(n => n.id === nodeId);
         if (liveNode) this._handleNodeClick(liveNode);
+    }
+
+    _setAutoRotate(on) {
+        this.state.autoRotate = on;
+        try {
+            const controls = this.graph?.controls();
+            if (controls) controls.autoRotate = on;
+        } catch { /* noop */ }
+        document.getElementById('graphAutoRotate')?.classList.toggle('active', on);
+    }
+
+    _dolly(factor) {
+        if (!this.graph) return;
+        try {
+            const cam = this.graph.cameraPosition();
+            const target = this.graph.controls()?.target || { x: 0, y: 0, z: 0 };
+            this.graph.cameraPosition({
+                x: target.x + (cam.x - target.x) * factor,
+                y: target.y + (cam.y - target.y) * factor,
+                z: target.z + (cam.z - target.z) * factor,
+            }, undefined, 260);
+        } catch { /* noop */ }
+    }
+
+    _setFocusExit(visible) {
+        const chip = document.getElementById('graphFocusExit');
+        if (chip) chip.hidden = !visible;
     }
 
     // ========================================
@@ -470,10 +714,14 @@ export class GraphView {
             for (const n of nodes) { delete n.fx; delete n.fy; delete n.fz; }
         }
         this.graph.d3ReheatSimulation();
+        // 나선으로 펼쳐진 전체 모습이 보이도록 잠시 후 화면 맞춤
+        if (this.state.layout === 'helix') {
+            setTimeout(() => { if (this.graph) this.graph.zoomToFit(900, 85); }, 900);
+        }
     }
 
     // ========================================
-    // 툴바 / 범례 / 통계
+    // 툴바 / HUD / 범례 / 통계
     // ========================================
 
     _bindControls() {
@@ -528,6 +776,17 @@ export class GraphView {
             labelsBtn._bound = true;
         }
 
+        // 내비 HUD
+        const bindClick = (id, fn) => {
+            const el = document.getElementById(id);
+            if (el && !el._bound) { el.addEventListener('click', fn); el._bound = true; }
+        };
+        bindClick('graphZoomIn', () => this._dolly(0.72));
+        bindClick('graphZoomOut', () => this._dolly(1.38));
+        bindClick('graphFitView', () => { if (this.graph) this.graph.zoomToFit(800, 85); });
+        bindClick('graphAutoRotate', () => this._setAutoRotate(!this.state.autoRotate));
+        bindClick('graphFocusExit', () => this._clearSelection({ refit: true }));
+
         document.getElementById('closeGraphView')?.addEventListener('click', () => this.close());
         document.getElementById('graphViewModal')?.addEventListener('click', (e) => {
             if (e.target === e.currentTarget) this.close();
@@ -541,6 +800,7 @@ export class GraphView {
             b.classList.toggle('active', b.dataset.layout === this.state.layout));
         document.getElementById('graphBloomToggle')?.classList.toggle('active', this.state.bloom);
         document.getElementById('graphLabelsToggle')?.classList.toggle('active', this.state.labels === 'all');
+        document.getElementById('graphAutoRotate')?.classList.toggle('active', this.state.autoRotate);
         const search = document.getElementById('graphSearch');
         if (search) search.value = this.state.search;
     }
@@ -549,22 +809,24 @@ export class GraphView {
         const statsEl = document.getElementById('graphStats');
         statsEl.replaceChildren();
         const c = this.data.counts;
-        const mkSpan = (label, value) => {
+        const mkStat = (label, value) => {
             const s = document.createElement('span');
+            s.className = 'graph-stat';
             const strong = document.createElement('strong');
             strong.textContent = String(value);
-            s.append(strong, ` ${label}`);
+            const lab = document.createElement('em');
+            lab.textContent = label;
+            s.append(strong, lab);
             return s;
         };
-        const sep = () => document.createTextNode(' · ');
         statsEl.append(
-            mkSpan('일기', c.entries), sep(),
-            mkSpan('키워드 허브', c.hubs), sep(),
-            mkSpan('명시', c.explicit), sep(),
-            mkSpan('키워드', c.keyword), sep(),
-            mkSpan('시간순', c.chronology),
+            mkStat('일기', c.entries),
+            mkStat('허브', c.hubs),
+            mkStat('명시', c.explicit),
+            mkStat('키워드', c.keyword),
+            mkStat('시간', c.chronology),
         );
-        if (c.isolated > 0) statsEl.append(sep(), mkSpan('고립', c.isolated));
+        if (c.isolated > 0) statsEl.append(mkStat('고립', c.isolated));
     }
 
     _renderClusterLegend() {
@@ -589,6 +851,7 @@ export class GraphView {
                 this.state.spotlightCluster = this.state.spotlightCluster === cl.id ? null : cl.id;
                 this.state.selectedId = null;
                 this._showEmpty();
+                this._setFocusExit(!!this.state.spotlightCluster);
                 this._renderClusterLegend();
                 this._refresh();
             });

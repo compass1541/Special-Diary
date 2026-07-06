@@ -83,6 +83,22 @@ describe('buildGraphData', () => {
         expect(g.counts.isolated).toBe(2);
     });
 
+    it('지배 키워드가 달라도 공유 허브가 있으면 같은 클러스터로 묶인다', () => {
+        // 각 엔트리의 1위 키워드(바다/산/도시)는 다르지만 모두 '여행'을 공유
+        const entries = [
+            E('2026-01-01', '바다 바다 여행'),
+            E('2026-01-02', '산 산 여행'),
+            E('2026-01-03', '도시 도시 여행'),
+        ];
+        const g = buildGraphData(entries);
+        const travel = g.clusters.find(c => c.id === '여행');
+        expect(travel).toBeDefined();
+        expect(travel.size).toBe(3);
+        for (const id of ['2026-01-01', '2026-01-02', '2026-01-03']) {
+            expect(g.nodes.find(n => n.id === id).cluster).toBe('여행');
+        }
+    });
+
     it('클러스터 목록은 크기 내림차순이고 misc가 아닌 클러스터는 서로 다른 색을 가진다', () => {
         const entries = [
             E('2026-01-01', '그림 그림 그림 연습'),

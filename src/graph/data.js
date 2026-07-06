@@ -63,13 +63,32 @@ export function buildGraphData(entries, options = {}) {
         topByEntry.set(e.id, topKeywords(e.id, stats, hubKeywordsPerEntry));
     }
 
-    // ---- 클러스터: 지배 키워드가 같은 엔트리끼리. 크기순으로 골든앵글 색 부여.
+    // ---- 허브 후보 집계 (클러스터 지정과 허브 노드 생성에 공용)
+    const hubCandidates = new Map(); // term -> entryId[]
+    for (const [entryId, kws] of topByEntry) {
+        for (const term of kws) {
+            let arr = hubCandidates.get(term);
+            if (!arr) { arr = []; hubCandidates.set(term, arr); }
+            arr.push(entryId);
+        }
+    }
+
+    // ---- 클러스터: 엔트리의 상위 키워드 중 "가장 큰 커뮤니티(허브)"에 소속.
+    //      지배 키워드 단독 기준은 거의 모든 클러스터가 크기 1이 되는 문제가 있어,
+    //      공유 키워드(허브) 기준으로 묶는다. 허브가 없으면 지배 키워드(단독 클러스터).
     const clusterOf = new Map();
     const clusterSize = new Map();
     for (const e of entries) {
-        const top = (topByEntry.get(e.id) || [])[0] || 'misc';
-        clusterOf.set(e.id, top);
-        clusterSize.set(top, (clusterSize.get(top) || 0) + 1);
+        const kws = topByEntry.get(e.id) || [];
+        let best = null;
+        let bestCount = 1; // 2개 이상 공유될 때만 허브 클러스터로 인정
+        for (const term of kws) {
+            const count = hubCandidates.get(term)?.length || 0;
+            if (count > bestCount) { best = term; bestCount = count; }
+        }
+        const cluster = best || kws[0] || 'misc';
+        clusterOf.set(e.id, cluster);
+        clusterSize.set(cluster, (clusterSize.get(cluster) || 0) + 1);
     }
     const clusterColorMap = new Map();
     let colorIdx = 0;
@@ -123,14 +142,6 @@ export function buildGraphData(entries, options = {}) {
     }
 
     // ---- 키워드 허브: 2개 이상 엔트리의 상위 키워드에 등장하는 단어를 노드로 승격
-    const hubCandidates = new Map(); // term -> entryId[]
-    for (const [entryId, kws] of topByEntry) {
-        for (const term of kws) {
-            let arr = hubCandidates.get(term);
-            if (!arr) { arr = []; hubCandidates.set(term, arr); }
-            arr.push(entryId);
-        }
-    }
     const hubNodes = [...hubCandidates.entries()]
         .filter(([, ids]) => ids.length >= 2)
         .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
@@ -187,7 +198,7 @@ export function buildGraphData(entries, options = {}) {
  * @returns {Map<string, {x,y,z}>}
  */
 export function helixPositions(entryNodes, options = {}) {
-    const { radius = 140, perTurn = 10, minHeight = 240, step = 18 } = options;
+    const { radius = 160, perTurn = 8, minHeight = 280, step = 24 } = options;
     const sorted = [...entryNodes].sort(
         (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
     );
