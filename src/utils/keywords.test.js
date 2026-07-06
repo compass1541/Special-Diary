@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-    tokenize,
-    computeStats,
-    topKeywords,
-    findKeywordPairs,
-    assignClusters,
-    clusterColor,
-} from './keywords.js';
+import { tokenize, computeStats, topKeywords } from './keywords.js';
 
 describe('tokenize', () => {
     it('extracts Korean and English tokens', () => {
@@ -55,52 +48,5 @@ describe('computeStats / topKeywords', () => {
     });
 });
 
-describe('findKeywordPairs', () => {
-    it('finds pairs sharing minShared keywords', () => {
-        const entries = [
-            { id: 'a', content: '운동 독서 영화 음악 산책' },
-            { id: 'b', content: '운동 독서 영화 일기' },
-            { id: 'c', content: '독서 일기' },
-        ];
-        const stats = computeStats(entries);
-        const pairs = findKeywordPairs(stats, 2);
-        const pairKeys = pairs.map(p => `${p.a}||${p.b}`);
-        expect(pairKeys).toContain('a||b');
-    });
-
-    it('excludes pairs below threshold', () => {
-        const entries = [
-            { id: 'a', content: '운동 독서' },
-            { id: 'b', content: '운동' },
-        ];
-        const stats = computeStats(entries);
-        const pairs = findKeywordPairs(stats, 3);
-        expect(pairs).toEqual([]);
-    });
-});
-
-describe('assignClusters / clusterColor', () => {
-    it('assigns same cluster to entries with same dominant keyword', () => {
-        const entries = [
-            { id: 'a', content: '운동 운동 운동 산책' },
-            { id: 'b', content: '운동 운동 즐거움' },
-            { id: 'c', content: '독서 깊은 책' },
-        ];
-        const stats = computeStats(entries);
-        const clusters = assignClusters(entries, stats);
-        expect(clusters.get('a')).toBe(clusters.get('b'));
-        expect(clusters.get('a')).not.toBe(clusters.get('c'));
-    });
-
-    it('clusterColor is stable for same input', () => {
-        expect(clusterColor('test')).toBe(clusterColor('test'));
-    });
-
-    it('clusterColor returns valid hsl', () => {
-        expect(clusterColor('운동')).toMatch(/^hsl\(\d+, \d+%, \d+%\)$/);
-    });
-
-    it('misc cluster has reserved color', () => {
-        expect(clusterColor('misc')).toMatch(/hsl\(220/);
-    });
-});
+// findKeywordPairs / assignClusters / clusterColor는 그래프 2.0(키워드 허브)으로
+// 대체되어 제거됨 — 클러스터·색상 로직과 테스트는 src/graph/data.js 쪽에 있다.

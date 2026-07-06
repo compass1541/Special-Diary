@@ -13,6 +13,7 @@
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://generativelanguage.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; base-uri 'self'; form-action 'self'; object-src 'none'">
     <meta name="referrer" content="strict-origin-when-cross-origin">
     <title>Special Diary</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📔</text></svg>">
     <meta name="description" content="AI 기반 스마트 일기장 - 당신의 일상을 기록하고 AI와 함께 탐색하세요">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -63,9 +64,16 @@
                 </div>
             </div>
 
-            <!-- AI Search -->
+            <!-- AI -->
             <div class="ai-search-container">
-                <button class="ai-search-btn" id="openAiSearch">
+                <button class="persona-cta" id="openPersonaChat">
+                    <span class="persona-cta-icon" aria-hidden="true">✦</span>
+                    <span class="persona-cta-text">
+                        <span class="persona-cta-title">또 다른 나와 대화</span>
+                        <span class="persona-cta-sub">내 일기를 아는 AI 분신</span>
+                    </span>
+                </button>
+                <button class="ai-search-btn" id="openAiSearch" style="margin-top: 8px;">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="11" cy="11" r="8"></circle>
                         <path d="m21 21-4.35-4.35"></path>
@@ -80,7 +88,7 @@
                         <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
                         <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
                     </svg>
-                    <span>일기 3D 연결망 보기</span>
+                    <span>기억의 우주 — 3D 연결망</span>
                 </button>
             </div>
 
@@ -284,19 +292,27 @@
         </div>
     </div>
 
-    <!-- 3D Graph Modal -->
+    <!-- 3D Graph Modal — 기억의 우주 -->
     <div class="modal-overlay" id="graphViewModal" role="dialog" aria-modal="true" aria-labelledby="graphViewTitle" aria-hidden="true">
-        <div class="modal graph-modal" style="width: 95vw; max-width: 1400px; height: 92vh; max-height: none;">
-            <div class="modal-header">
-                <h2 id="graphViewTitle">일기 3D 연결망</h2>
+        <div class="modal graph-modal" style="width: 95vw; max-width: 1500px; height: 92vh; max-height: none;">
+            <div class="modal-header graph-header">
+                <h2 id="graphViewTitle">기억의 우주</h2>
                 <div class="graph-controls">
                     <input type="search" class="graph-search" id="graphSearch"
                         placeholder="키워드 / 날짜로 검색..." aria-label="그래프 노드 검색">
                     <div class="graph-filter" role="group" aria-label="링크 종류 필터">
                         <button class="graph-filter-btn active" data-filter="all">전체</button>
-                        <button class="graph-filter-btn" data-filter="explicit">명시적만</button>
-                        <button class="graph-filter-btn" data-filter="implicit">키워드만</button>
-                        <button class="graph-filter-btn" data-filter="chronology">시간순만</button>
+                        <button class="graph-filter-btn" data-filter="explicit">명시</button>
+                        <button class="graph-filter-btn" data-filter="keyword">키워드</button>
+                        <button class="graph-filter-btn" data-filter="chronology">시간순</button>
+                    </div>
+                    <div class="graph-filter" role="group" aria-label="레이아웃">
+                        <button class="graph-layout-btn active" data-layout="free">자유</button>
+                        <button class="graph-layout-btn" data-layout="helix">시간 나선</button>
+                    </div>
+                    <div class="graph-filter" role="group" aria-label="표시 옵션">
+                        <button class="graph-toggle-btn active" id="graphBloomToggle" title="글로우 효과 켜기/끄기">✨ 글로우</button>
+                        <button class="graph-toggle-btn" id="graphLabelsToggle" title="모든 노드의 라벨 표시">라벨 전체</button>
                     </div>
                 </div>
                 <button class="modal-close" id="closeGraphView" aria-label="연결망 보기 닫기">
@@ -310,18 +326,21 @@
                     <div id="3d-graph" role="img" aria-label="일기 간 3D 연결망 그래프"></div>
                     <div class="graph-loading" id="graphLoading">3D 엔진 로딩 중...</div>
                     <div class="graph-stats" id="graphStats"></div>
+                    <div class="graph-cluster-legend" id="graphClusterLegend" aria-label="주제 클러스터"></div>
                     <div class="graph-legend" aria-label="범례">
                         <div class="legend-item"><span class="legend-line legend-line-explicit"></span>명시적 링크 [[ ]]</div>
-                        <div class="legend-item"><span class="legend-line legend-line-implicit"></span>공유 키워드 (3개+)</div>
+                        <div class="legend-item"><span class="legend-line legend-line-implicit"></span>키워드 허브 연결</div>
                         <div class="legend-item"><span class="legend-line legend-line-chronology"></span>시간순 인접 (≤30일)</div>
-                        <div class="legend-item"><span class="legend-dot" style="background: hsl(200, 70%, 60%);"></span>색상 = 주제 클러스터</div>
+                        <div class="legend-item"><span class="legend-dot" style="background: hsl(45, 95%, 68%);"></span>◆ 키워드 허브</div>
+                        <div class="legend-item"><span class="legend-dot" style="background: hsl(200, 70%, 60%);"></span>● 일기 (색 = 주제)</div>
                     </div>
                 </div>
                 <aside class="graph-sidepanel" id="graphSidepanel" aria-live="polite">
                     <div class="graph-sidepanel-empty" id="graphSidepanelEmpty">
-                        <p>노드를 클릭하면 일기 정보가 표시됩니다.</p>
+                        <p>노드를 클릭하면 상세 정보가 표시됩니다.</p>
                         <p style="font-size: 0.8125rem; color: var(--text-tertiary); margin-top: 12px;">
-                            마우스 드래그로 회전, 휠로 확대/축소
+                            드래그 회전 · 휠 확대 · ESC 선택 해제<br>
+                            ◆ 금색 = 키워드 허브 · ● = 일기
                         </p>
                     </div>
                     <div class="graph-sidepanel-detail" id="graphSidepanelDetail" style="display: none;">
@@ -329,15 +348,62 @@
                         <div class="graph-sp-content" id="spContent"></div>
                         <div class="graph-sp-meta">
                             <span id="spExplicitCount" title="명시적 링크 수">↗ 0</span>
-                            <span id="spImplicitCount" title="키워드 링크 수">≈ 0</span>
+                            <span id="spKeywordCount" title="키워드 허브 연결 수"># 0</span>
                         </div>
                         <div class="graph-sp-keywords" id="spKeywords"></div>
-                        <button class="graph-sp-open" id="spOpenInEditor">편집기에서 열기</button>
+                        <div class="graph-sp-related" id="spRelated"></div>
+                        <div class="graph-sp-actions">
+                            <button class="graph-sp-open" id="spOpenInEditor">편집기에서 열기</button>
+                            <button class="graph-sp-ask" id="spAskPersona">✦ 분신에게 묻기</button>
+                        </div>
+                    </div>
+                    <div class="graph-sidepanel-hub" id="graphSidepanelHub" style="display: none;">
+                        <div class="graph-sp-hub-name" id="spHubName"></div>
+                        <div class="graph-sp-hub-count" id="spHubCount"></div>
+                        <div class="graph-sp-related" id="spHubEntries"></div>
                     </div>
                 </aside>
             </div>
         </div>
     </div>
+
+    <!-- AI 분신 채팅 패널 -->
+    <aside class="persona-panel" id="personaPanel" role="dialog" aria-labelledby="personaTitle" aria-hidden="true">
+        <div class="persona-header">
+            <div class="persona-identity">
+                <div class="persona-avatar" aria-hidden="true">✦</div>
+                <div class="persona-identity-text">
+                    <span class="persona-title" id="personaTitle">또 다른 나</span>
+                    <span class="persona-status" id="personaStatus"></span>
+                </div>
+            </div>
+            <div class="persona-header-actions">
+                <button class="persona-hbtn" id="personaProfileBtn" title="분신이 이해한 나">프로필</button>
+                <button class="persona-hbtn" id="personaResetBtn" title="대화 초기화" aria-label="대화 초기화">⟲</button>
+                <button class="persona-hbtn" id="closePersonaPanel" aria-label="분신 패널 닫기">✕</button>
+            </div>
+        </div>
+        <div class="persona-profile-drawer" id="personaProfileDrawer" hidden>
+            <div class="persona-profile-head">
+                <span>분신이 이해한 나</span>
+                <button class="persona-hbtn" id="personaProfileRefresh">갱신</button>
+            </div>
+            <div class="persona-profile-content" id="personaProfileContent"></div>
+            <div class="persona-profile-meta" id="personaProfileMeta"></div>
+        </div>
+        <div class="persona-messages" id="personaMessages" aria-live="polite"></div>
+        <div class="persona-suggestions" id="personaSuggestions"></div>
+        <div class="persona-context" id="personaContext"></div>
+        <form class="persona-input-row" id="personaForm">
+            <textarea id="personaInput" rows="1" placeholder="나에게 무엇이든 물어봐…" maxlength="2000"
+                aria-label="분신에게 보낼 메시지"></textarea>
+            <button type="submit" class="persona-send" id="personaSend" aria-label="보내기">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                    <path d="M12 19V5M5 12l7-7 7 7"></path>
+                </svg>
+            </button>
+        </form>
+    </aside>
 
     <!-- Auth Modal -->
     <div class="modal-overlay" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authModalTitle" aria-hidden="true">

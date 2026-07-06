@@ -7,8 +7,14 @@ export default defineConfig({
         chunkSizeWarningLimit: 1500,
     },
     optimizeDeps: {
-        // dynamic import 대상이라 Vite가 처음 만나면 lazy 사전번들을 시도하다 504를 낼 수 있다.
+        // dynamic import 대상이라 Vite가 처음 만나면 lazy 사전번들을 시도하다 504를 내거나
+        // "new dependencies optimized" 전체 리로드를 일으킬 수 있다.
         // 명시적으로 포함시켜 dev 서버 시작 시 한 번에 처리.
-        include: ['3d-force-graph', 'three', 'three-spritetext'],
+        include: [
+            '3d-force-graph',
+            'three',
+            'three-spritetext',
+            'three/addons/postprocessing/UnrealBloomPass.js',
+        ],
     },
 });

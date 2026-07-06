@@ -2,8 +2,13 @@
 
 AI 기반 스마트 일기장. Vanilla JS + Vite + Supabase + Google Gemini.
 
-- **Obsidian 스타일 링크** `[[YYYY-MM-DD]]` — 다른 날짜 일기 참조
-- **3D 키워드 그래프** — 명시적 링크 + 공유 키워드로 일기 간 관계 시각화
+- **AI 분신 "또 다른 나"** — 내 일기를 아는 페르소나와 대화. 질문과 관련된 일기를
+  로컬 TF-IDF retrieval로 골라 보내고, 답변 속 `[[YYYY-MM-DD]]` 인용은 클릭하면 해당 일기가 열린다.
+  "분신이 이해한 나" 프로필(가치관·주제·감정 패턴·습관·말투)을 생성/캐시.
+- **기억의 우주 (3D 연결망 2.0)** — 공유 키워드가 **허브 노드**로 승격되는 2-모드 그래프.
+  왜 연결됐는지가 구조로 보인다. Bloom 글로우, 스마트 라벨, 자유/시간 나선 레이아웃,
+  클러스터 스포트라이트, 관련 일기 탐색, 그래프에서 바로 "분신에게 묻기".
+- **Obsidian 스타일 링크** `[[YYYY-MM-DD]]` — 다른 날짜 일기 참조 (자동완성)
 - **AI 검색·제안** — 자연어 질의로 관련 일기 찾기, 작성 중인 일기에 대한 코멘트
 - **로컬 우선** — IndexedDB 기본, 로그인 시 Supabase로 클라우드 동기화
 - **Google OAuth + 이메일 로그인**
@@ -72,6 +77,10 @@ supabase secrets set GEMINI_API_KEY=<your_actual_gemini_key>
 배포 후, 클라이언트가 자동으로 Edge Function을 사용한다(supabase 로그인 상태일 때).
 `.env`의 `VITE_GEMINI_API_KEY`는 **비워둘 수 있다** (로컬 비로그인 사용자 폴백 용으로만 유지).
 
+> ⚠️ **AI 분신(chat/profile 액션)은 ai-proxy 최신 버전 필요.** 과거에 배포한 적이 있다면
+> 위 deploy 명령으로 **재배포**해야 한다. 구버전이 배포된 상태면 클라이언트가
+> `VITE_GEMINI_API_KEY` 직접 호출로 폴백하고, 그것도 없으면 재배포 안내를 표시한다.
+
 ### 4. 실행
 
 ```bash
@@ -104,20 +113,28 @@ npm run format       # prettier
 ├── index.html                                    # SPA 진입점, CSP 메타 포함
 ├── src/
 │   ├── main.js                                   # 부트스트랩
-│   ├── app.js                                    # 메인 DiaryApp 클래스 (※ 분할 예정 - L3)
+│   ├── app.js                                    # DiaryApp: 달력·편집기·인증 (그래프/분신은 모듈로 위임)
 │   ├── storage.js                                # IndexedDB
 │   ├── supabase.js                               # Supabase auth + diary CRUD + Edge Function 호출
-│   ├── gemini.js                                 # ai-proxy 호출 우선, 로컬 SDK 폴백
+│   ├── gemini.js                                 # ai-proxy 호출 우선, 로컬 SDK 폴백 (+분신 chat/profile)
 │   ├── styles.css                                # 다크 테마
+│   ├── graph/
+│   │   ├── data.js                               # 순수 함수: 노드/링크/허브/클러스터/나선 좌표 [tested]
+│   │   └── view.js                               # 기억의 우주 3D 뷰 (bloom, 레이아웃, 포커스, 사이드패널)
+│   ├── ai/
+│   │   ├── retrieval.js                          # 질문→관련 일기 top-K (TF-IDF+최근성) [tested]
+│   │   ├── persona.js                            # 분신 상태: 대화 히스토리 + 프로필 캐시
+│   │   └── chatView.js                           # 채팅 패널 DOM (인용 칩, 프로필 드로어)
 │   └── utils/
+│       ├── keywords.js                           # 토크나이즈, TF-IDF [tested]
 │       ├── security.js                           # PostgREST escape, 프롬프트 sanitize, 비밀번호 강도
-│       └── security.test.js                      # vitest
+│       └── crypto.js                             # E2EE 준비 모듈 (미활성)
 ├── supabase/
 │   ├── migrations/
 │   │   └── 20260426_001_diary_entries_rls.sql    # 테이블 + RLS 정책
 │   └── functions/
 │       └── ai-proxy/
-│           └── index.ts                          # Gemini 프록시 (JWT 검증, 레이트 리밋)
+│           └── index.ts                          # Gemini 프록시 (JWT 검증, 레이트 리밋, chat/profile)
 ├── .github/workflows/ci.yml                      # 빌드/테스트/키 노출 검사
 ├── vitest.config.js
 ├── eslint.config.js
@@ -126,9 +143,10 @@ npm run format       # prettier
 
 ## 알려진 한계 / TODO
 
-- `src/app.js`가 ~1,300줄 단일 파일. 다음 큰 변경 전에 `ui/`, `state/`로 분리 권장 (L3 항목).
+- 분신 프로필 캐시는 `localStorage` (기기별). 기기 간 프로필 동기화는 미구현 — 다른 기기에선 재생성.
 - 페이지네이션 인프라는 추가됐으나 (`getAllEntries({ limit, offset })`) UI 측 "더 보기" 버튼 미구현.
 - 라이트 모드 미지원 (다크 테마 전용).
+- 분신 응답은 스트리밍이 아닌 일괄 수신 (타이핑 인디케이터로 대기 표시).
 
 ### 종단간 암호화 (E2EE) — `src/utils/crypto.js`
 

@@ -4,7 +4,9 @@
 import { storage } from './storage.js';
 import { supabaseStorage } from './supabase.js';
 import { gemini } from './gemini.js';
-import { computeStats, topKeywords, findKeywordPairs, assignClusters, clusterColor } from './utils/keywords.js';
+import { GraphView } from './graph/view.js';
+import { PersonaChat } from './ai/persona.js';
+import { ChatView } from './ai/chatView.js';
 
 export class DiaryApp {
     constructor() {
@@ -24,6 +26,22 @@ export class DiaryApp {
         this.autocompleteQuery = '';
         this.autocompleteIndex = -1;
         this.autocompleteResults = [];
+
+        // 기억의 우주 (3D 연결망) — src/graph/view.js
+        this.graphView = new GraphView({
+            onOpenEntry: (dateIso) => this.selectDate(new Date(dateIso)),
+            onAskPersona: (entry) => this.chatView.open({ seedEntry: entry }),
+        });
+
+        // AI 분신 "또 다른 나" — src/ai/
+        this.persona = new PersonaChat({
+            getEntries: () => Promise.resolve(this.entries),
+        });
+        this.chatView = new ChatView({
+            persona: this.persona,
+            getEntries: () => Promise.resolve(this.entries),
+            onOpenEntry: (dateId) => this.selectDate(new Date(`${dateId}T12:00:00`)),
+        });
 
         this.init();
     }
@@ -90,10 +108,13 @@ export class DiaryApp {
         // AI Suggestion Modal
         document.getElementById('closeAiSuggestion').addEventListener('click', () => this.closeAISuggestionModal());
 
-        // Graph View Modal
-        document.getElementById('openGraphView').addEventListener('click', () => this.openGraphViewModal());
-        document.getElementById('closeGraphView').addEventListener('click', () => this.closeGraphViewModal());
-        this._bindGraphControls();
+        // Graph View (기억의 우주) — 열기만 여기서, 나머지는 GraphView가 스스로 바인딩
+        document.getElementById('openGraphView').addEventListener('click', () =>
+            this.graphView.open(this.entries));
+
+        // AI 분신 채팅
+        document.getElementById('openPersonaChat')?.addEventListener('click', () =>
+            this.chatView.open());
 
         // Modal overlay clicks
         document.getElementById('aiSearchModal').addEventListener('click', (e) => {
@@ -101,9 +122,6 @@ export class DiaryApp {
         });
         document.getElementById('aiSuggestionModal').addEventListener('click', (e) => {
             if (e.target === e.currentTarget) this.closeAISuggestionModal();
-        });
-        document.getElementById('graphViewModal').addEventListener('click', (e) => {
-            if (e.target === e.currentTarget) this.closeGraphViewModal();
         });
 
         // Auto-save on content change
@@ -1274,380 +1292,4 @@ export class DiaryApp {
         }, 3000);
     }
 
-    // ========================================
-    // Graph View (3D Network)
-    // ========================================
-
-    openGraphViewModal() {
-        const m = document.getElementById('graphViewModal');
-        m.classList.add('active');
-        m.setAttribute('aria-hidden', 'false');
-        // Reset side panel
-        document.getElementById('graphSidepanelEmpty').style.display = '';
-        document.getElementById('graphSidepanelDetail').style.display = 'none';
-        this.graphSelectedId = null;
-        this.graphFilter = 'all';
-        this.graphSearchQuery = '';
-        document.querySelectorAll('.graph-filter-btn').forEach(b => {
-            b.classList.toggle('active', b.dataset.filter === 'all');
-        });
-        const searchInput = document.getElementById('graphSearch');
-        if (searchInput) searchInput.value = '';
-        // Render after the modal layout settles (so canvas gets correct dimensions)
-        setTimeout(() => this.renderGraphView(), 50);
-    }
-
-    closeGraphViewModal() {
-        const m = document.getElementById('graphViewModal');
-        m.classList.remove('active');
-        m.setAttribute('aria-hidden', 'true');
-        if (this.graph) {
-            // 3d-force-graph: pause animation and free WebGL resources
-            try { this.graph._destructor(); } catch { /* noop */ }
-            this.graph = null;
-        }
-        if (this.graphResizeObserver) {
-            try { this.graphResizeObserver.disconnect(); } catch { /* noop */ }
-            this.graphResizeObserver = null;
-        }
-        this.graphData = null;
-        this.graphStats = null;
-    }
-
-    async renderGraphView() {
-        const graphContainer = document.getElementById('3d-graph');
-        const loadingEl = document.getElementById('graphLoading');
-        const statsEl = document.getElementById('graphStats');
-        graphContainer.replaceChildren();
-
-        if (this.entries.length === 0) {
-            loadingEl.classList.add('hidden');
-            const empty = document.createElement('div');
-            empty.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-secondary);';
-            empty.textContent = '일기가 없습니다.';
-            graphContainer.appendChild(empty);
-            statsEl.replaceChildren();
-            return;
-        }
-
-        // Lazy-load 3D engine — keeps initial bundle small
-        loadingEl.classList.remove('hidden');
-        loadingEl.textContent = '3D 엔진 로딩 중...';
-        let ForceGraph3D, SpriteText;
-        try {
-            const [graphMod, spriteMod] = await Promise.all([
-                import('3d-force-graph'),
-                import('three-spritetext'),
-            ]);
-            ForceGraph3D = graphMod.default;
-            SpriteText = spriteMod.default;
-        } catch (err) {
-            console.error('3D 그래프 엔진 로드 실패:', err);
-            loadingEl.textContent = '3D 엔진 로드 실패. 네트워크를 확인하세요.';
-            return;
-        }
-
-        // Build graph data
-        const stats = computeStats(this.entries);
-        const clusters = assignClusters(this.entries, stats);
-        const nodeMap = new Map();
-        const nodes = this.entries.map(entry => {
-            const cluster = clusters.get(entry.id);
-            const node = {
-                id: entry.id,
-                name: this.formatDisplayDate(new Date(entry.date)),
-                cluster,
-                color: clusterColor(cluster),
-                val: 2,
-                explicitDeg: 0,
-                implicitDeg: 0,
-                preview: entry.content ? entry.content.slice(0, 200) : '내용 없음',
-                fullContent: entry.content || '',
-                date: entry.date,
-                keywords: topKeywords(entry.id, stats, 6),
-            };
-            nodeMap.set(entry.id, node);
-            return node;
-        });
-
-        const links = [];
-        const linkRegex = /\[\[(\d{4}-\d{2}-\d{2})\]\]/g;
-        for (const entry of this.entries) {
-            if (!entry.content) continue;
-            const seen = new Set();
-            for (const match of entry.content.matchAll(linkRegex)) {
-                const target = match[1];
-                if (target === entry.id || seen.has(target) || !nodeMap.has(target)) continue;
-                seen.add(target);
-                links.push({ source: entry.id, target, type: 'explicit' });
-                nodeMap.get(entry.id).explicitDeg += 1;
-                nodeMap.get(target).explicitDeg += 1;
-                nodeMap.get(entry.id).val += 1;
-                nodeMap.get(target).val += 1;
-            }
-        }
-
-        for (const { a, b, shared } of findKeywordPairs(stats, 3)) {
-            if (!nodeMap.has(a) || !nodeMap.has(b)) continue;
-            links.push({ source: a, target: b, type: 'implicit', shared });
-            nodeMap.get(a).implicitDeg += 1;
-            nodeMap.get(b).implicitDeg += 1;
-            nodeMap.get(a).val += 0.3;
-            nodeMap.get(b).val += 0.3;
-        }
-
-        // 시간순 인접 링크 — 어떤 일기도 완전 고립되지 않게 한다.
-        // 연속한 두 일기의 간격이 30일 이하일 때만 연결 (긴 공백을 가로지르지 않음).
-        const sortedByDate = [...this.entries].sort((a, b) =>
-            new Date(a.date).getTime() - new Date(b.date).getTime()
-        );
-        const ONE_DAY = 24 * 60 * 60 * 1000;
-        for (let i = 0; i < sortedByDate.length - 1; i++) {
-            const a = sortedByDate[i];
-            const b = sortedByDate[i + 1];
-            const gapDays = Math.abs(new Date(b.date) - new Date(a.date)) / ONE_DAY;
-            if (gapDays > 30) continue;
-            links.push({ source: a.id, target: b.id, type: 'chronology', gapDays });
-        }
-
-        // 진짜 고립 카운트 (시간순 링크가 추가됐어도 처음/마지막일 수 있으므로 따로 집계)
-        const linkedIds = new Set();
-        for (const l of links) { linkedIds.add(l.source); linkedIds.add(l.target); }
-        const isolatedCount = nodes.filter(n => !linkedIds.has(n.id)).length;
-
-        this.graphData = { nodes, links };
-        this.graphStats = stats;
-
-        // Stats overlay
-        const explicitCount = links.filter(l => l.type === 'explicit').length;
-        const implicitCount = links.filter(l => l.type === 'implicit').length;
-        const chronologyCount = links.filter(l => l.type === 'chronology').length;
-        statsEl.replaceChildren();
-        const mkSpan = (label, value) => {
-            const s = document.createElement('span');
-            const strong = document.createElement('strong');
-            strong.textContent = String(value);
-            s.append(strong, ` ${label}`);
-            return s;
-        };
-        const sep = () => document.createTextNode(' · ');
-        statsEl.append(
-            mkSpan('일기', nodes.length),
-            sep(),
-            mkSpan('명시', explicitCount),
-            sep(),
-            mkSpan('키워드', implicitCount),
-            sep(),
-            mkSpan('시간순', chronologyCount),
-        );
-        if (isolatedCount > 0) {
-            statsEl.append(sep(), mkSpan('고립', isolatedCount));
-        }
-
-        if (nodes.length > 500) {
-            console.warn(`그래프에 ${nodes.length}개 노드 — 렌더링 성능에 영향 가능.`);
-        }
-
-        // Build the 3D graph
-        const graph = ForceGraph3D()(graphContainer)
-            .backgroundColor('rgba(0,0,0,0)')
-            .graphData(this.graphData)
-            .nodeLabel(() => '')  // 툴팁 비활성 — SpriteText 라벨이 대신함
-            .nodeRelSize(4)
-            .nodeVal(node => Math.min(node.val, 12))
-            .nodeColor(node => this._graphNodeColor(node))
-            .nodeOpacity(0.92)
-            .nodeResolution(10)
-            .linkColor(link => this._graphLinkColor(link))
-            .linkWidth(link => {
-                if (link.type === 'explicit') return 1.5;
-                if (link.type === 'implicit') return 0.5;
-                return 0.35; // chronology
-            })
-            .linkOpacity(1.0) // 투명도는 linkColor rgba 알파로만 제어
-            .linkCurvature(0)
-            .linkDirectionalParticles(link => link.type === 'explicit' ? 2 : 0)
-            .linkDirectionalParticleSpeed(0.005)
-            .linkDirectionalParticleWidth(1.8)
-            .linkDirectionalParticleColor(() => 'rgba(140, 210, 255, 0.95)')
-            .nodeThreeObjectExtend(true)
-            .nodeThreeObject(node => {
-                const size = Math.min(Math.max(node.val, 2), 12);
-                const sprite = new SpriteText(node.name);
-                sprite.color = '#ffffff';              // 흰색 — 어떤 배경에서도 가독성 보장
-                sprite.backgroundColor = 'rgba(10,10,18,0.55)'; // 텍스트 뒤 반투명 패널
-                sprite.textHeight = Math.max(4.0, size * 0.5 + 2.5);
-                sprite.fontFace = 'Inter, -apple-system, sans-serif';
-                sprite.fontWeight = '600';
-                sprite.padding = 2;
-                sprite.borderRadius = 3;
-                sprite.position.set(0, size + 5, 0); // 노드 위에 배치
-                return sprite;
-            })
-            .onNodeClick(node => {
-                this._graphFocusNode(node);
-                this._graphShowDetail(node);
-            })
-            .onNodeHover(node => {
-                graphContainer.style.cursor = node ? 'pointer' : null;
-            })
-            .cooldownTicks(120)
-            .warmupTicks(20);
-
-        // Tune physics
-        // 약한 척력으로 응집감 유지 + 시간순 링크는 짧고 강하게(타임라인 형태) + 키워드 링크는 길고 느슨하게
-        graph.d3Force('charge').strength(-220);
-        graph.d3Force('link')
-            .distance(link => {
-                if (link.type === 'explicit') return 60;
-                if (link.type === 'chronology') return 40;
-                return 100;
-            })
-            .strength(link => {
-                if (link.type === 'explicit') return 0.7;
-                if (link.type === 'chronology') return 0.35;
-                return 0.12;
-            });
-
-        // Hide loading overlay after first render frame
-        graph.onEngineTick(() => {
-            if (!loadingEl.classList.contains('hidden')) {
-                loadingEl.classList.add('hidden');
-            }
-        });
-
-        // Bloom 제거 — 포스트프로세싱 파이프라인 없이 기본 WebGL 렌더링으로 성능 확보
-        // 대신 노드/링크 색상의 채도·밝기를 올려 발광 느낌을 CSS+색상으로 대체
-
-        this.graph = graph;
-
-        // Resize the canvas when modal/window changes
-        if (typeof ResizeObserver !== 'undefined') {
-            this.graphResizeObserver = new ResizeObserver(() => {
-                const { clientWidth, clientHeight } = graphContainer;
-                if (this.graph && clientWidth && clientHeight) {
-                    this.graph.width(clientWidth).height(clientHeight);
-                }
-            });
-            this.graphResizeObserver.observe(graphContainer);
-        }
-    }
-
-    _graphNodeColor(node) {
-        const sel = this.graphSelectedId;
-        const q = (this.graphSearchQuery || '').trim().toLowerCase();
-        if (q) {
-            const matches = node.id.toLowerCase().includes(q)
-                || node.name.toLowerCase().includes(q)
-                || (node.keywords || []).some(k => k.includes(q))
-                || (node.fullContent || '').toLowerCase().includes(q);
-            return matches ? node.color : 'rgba(140, 140, 150, 0.18)';
-        }
-        if (sel) {
-            const isSelf = node.id === sel;
-            const isNeighbor = (this.graphData?.links || []).some(l => {
-                const s = typeof l.source === 'object' ? l.source.id : l.source;
-                const t = typeof l.target === 'object' ? l.target.id : l.target;
-                return (s === sel && t === node.id) || (t === sel && s === node.id);
-            });
-            if (isSelf || isNeighbor) return node.color;
-            return 'rgba(140, 140, 150, 0.15)';
-        }
-        return node.color;
-    }
-
-    _graphLinkColor(link) {
-        const visible = this._linkPassesFilter(link);
-        if (!visible) return 'rgba(0,0,0,0)';
-        const sel = this.graphSelectedId;
-        const s = typeof link.source === 'object' ? link.source.id : link.source;
-        const t = typeof link.target === 'object' ? link.target.id : link.target;
-        const isHighlighted = sel && (s === sel || t === sel);
-        if (link.type === 'explicit') {
-            return isHighlighted ? 'rgba(100, 210, 255, 1)' : 'rgba(30, 148, 255, 0.90)';
-        }
-        if (link.type === 'chronology') {
-            return isHighlighted ? 'rgba(255, 255, 255, 0.55)' : 'rgba(180, 180, 210, 0.22)';
-        }
-        // implicit (keyword)
-        return isHighlighted ? 'rgba(200, 200, 255, 0.70)' : 'rgba(200, 200, 255, 0.30)';
-    }
-
-    _linkPassesFilter(link) {
-        if (this.graphFilter === 'all') return true;
-        if (this.graphFilter === 'explicit') return link.type === 'explicit';
-        if (this.graphFilter === 'implicit') return link.type === 'implicit';
-        if (this.graphFilter === 'chronology') return link.type === 'chronology';
-        return true;
-    }
-
-    _graphFocusNode(node) {
-        if (!this.graph || node.x == null) return;
-        const distance = 80;
-        const dist = Math.hypot(node.x, node.y, node.z) || 1;
-        const ratio = 1 + distance / dist;
-        
-        // Add a slight rotation offset for cinematic panning
-        const camPos = {
-            x: node.x * ratio + 10,
-            y: node.y * ratio + 15,
-            z: node.z * ratio
-        };
-        
-        this.graph.cameraPosition(
-            camPos,
-            { x: node.x, y: node.y, z: node.z },
-            1200 // Slower cinematic duration
-        );
-        this.graphSelectedId = node.id;
-        if (this.graph) this.graph.refresh();
-    }
-
-    _graphShowDetail(node) {
-        document.getElementById('graphSidepanelEmpty').style.display = 'none';
-        const detail = document.getElementById('graphSidepanelDetail');
-        detail.style.display = '';
-
-        document.getElementById('spDate').textContent = node.name;
-        document.getElementById('spContent').textContent = node.fullContent || '내용 없음';
-        document.getElementById('spExplicitCount').textContent = `↗ ${node.explicitDeg}`;
-        document.getElementById('spImplicitCount').textContent = `≈ ${node.implicitDeg}`;
-
-        const kwBox = document.getElementById('spKeywords');
-        kwBox.replaceChildren();
-        for (const kw of (node.keywords || [])) {
-            const chip = document.createElement('span');
-            chip.className = 'graph-sp-keyword';
-            chip.textContent = kw;
-            kwBox.appendChild(chip);
-        }
-
-        const openBtn = document.getElementById('spOpenInEditor');
-        openBtn.onclick = () => {
-            this.closeGraphViewModal();
-            this.selectDate(new Date(node.date));
-        };
-    }
-
-    _bindGraphControls() {
-        const search = document.getElementById('graphSearch');
-        if (search && !search._bound) {
-            search.addEventListener('input', (e) => {
-                this.graphSearchQuery = e.target.value;
-                if (this.graph) this.graph.refresh();
-            });
-            search._bound = true;
-        }
-        document.querySelectorAll('.graph-filter-btn').forEach(btn => {
-            if (btn._bound) return;
-            btn.addEventListener('click', () => {
-                this.graphFilter = btn.dataset.filter || 'all';
-                document.querySelectorAll('.graph-filter-btn').forEach(b =>
-                    b.classList.toggle('active', b === btn)
-                );
-                if (this.graph) this.graph.refresh();
-            });
-            btn._bound = true;
-        });
-    }
 }
