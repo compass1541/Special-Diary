@@ -23,4 +23,19 @@ describe('mobile responsive layout', () => {
             /\.modal-overlay\s*\{[^}]*height: 100dvh;/s
         );
     });
+
+    it('wraps graph controls and confines the graph modal to overlay content', () => {
+        expect(mobileStyles).toMatch(
+            /\.graph-controls\s*\{[^}]*display: grid;/s
+        );
+        expect(mobileStyles).toMatch(
+            /\.graph-filter\s*\{[^}]*flex-wrap: wrap;/s
+        );
+        expect(mobileStyles).toMatch(
+            /\.modal\s*\{[^}]*max-height: 100%/s
+        );
+        expect(mobileStyles).toMatch(
+            /\.graph-modal\s*\{[^}]*height: 100% !important;/s
+        );
+    });
 });
