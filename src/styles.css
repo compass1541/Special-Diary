@@ -950,6 +950,8 @@ body {
     .app-container {
         flex-direction: column;
         height: 100vh;
+        height: 100dvh;
+        min-height: 100svh;
         overflow: hidden;
     }
 
@@ -962,13 +964,20 @@ body {
         display: block;
         width: 100%;
         height: 100vh;
+        height: 100dvh;
+        min-height: 0;
     }
 
     .app-container:not(.editor-active) .sidebar {
         display: flex;
         width: 100%;
         height: 100vh;
+        height: 100dvh;
+        min-height: 100svh;
         max-height: none;
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
+        padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom));
         border-right: none;
     }
 
@@ -980,8 +989,8 @@ body {
     .entries-section {
         display: flex;
         flex-direction: column;
-        flex: 1;
-        overflow-y: auto;
+        flex: 0 0 auto;
+        overflow: visible;
         min-height: 200px;
     }
 
@@ -995,15 +1004,22 @@ body {
     /* 에디터 레이아웃 조정 */
     .main-content {
         height: 100vh;
+        height: 100dvh;
+        min-height: 0;
     }
 
     .editor-container {
-        height: 100%;
+        height: 100vh;
+        height: 100dvh;
+        min-height: 0;
     }
 
     .editor {
         padding: var(--spacing-md) var(--spacing-lg);
-        height: 100%;
+        padding-bottom: max(var(--spacing-md), env(safe-area-inset-bottom));
+        height: 100vh;
+        height: 100dvh;
+        min-height: 0;
         max-width: 100%;
         display: flex;
         flex-direction: column;
@@ -1061,6 +1077,7 @@ body {
 
     .editor-footer {
         padding-top: var(--spacing-md);
+        padding-bottom: env(safe-area-inset-bottom);
     }
 
     .daily-comment-section {
@@ -1074,6 +1091,30 @@ body {
     .daily-comment-input {
         padding: var(--spacing-sm);
         font-size: 0.875rem;
+    }
+
+    .modal-overlay {
+        height: 100vh;
+        height: 100dvh;
+        padding:
+            env(safe-area-inset-top)
+            var(--spacing-md)
+            max(var(--spacing-md), env(safe-area-inset-bottom));
+    }
+
+    .modal {
+        max-height: calc(100dvh - var(--spacing-xl));
+    }
+
+    .graph-modal {
+        height: calc(100dvh - var(--spacing-xl)) !important;
+    }
+
+    .action-btn,
+    .calendar-nav,
+    .modal-close {
+        min-width: 44px;
+        min-height: 44px;
     }
 }
 
