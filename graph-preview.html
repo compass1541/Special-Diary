@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#050711">
+    <title>기억의 우주 — 3D 콘셉트 미리보기</title>
+    <link rel="stylesheet" href="/src/graph/preview.css">
+</head>
+<body>
+    <header class="preview-header">
+        <a class="back-link" href="/" aria-label="Special Diary로 돌아가기">
+            <span aria-hidden="true">←</span> SPECIAL DIARY
+        </a>
+        <div class="preview-heading">
+            <span class="preview-kicker">3D NETWORK CONCEPT LAB</span>
+            <h1>기억의 우주, 두 개의 가능성</h1>
+            <p>같은 기억 연결망을 서로 다른 감각으로 연출한 인터랙티브 미리보기입니다.</p>
+        </div>
+        <div class="preview-hint"><span></span> 드래그해서 둘러보고 노드를 선택해 보세요</div>
+    </header>
+
+    <main class="concept-grid" aria-label="3D 연결망 콘셉트 비교">
+        <article class="concept-card concept-journey" data-concept="journey">
+            <div class="concept-copy">
+                <span class="concept-number">01</span>
+                <div>
+                    <span class="concept-eyebrow">MEMORY JOURNEY</span>
+                    <h2>기억 속 여행</h2>
+                    <p>성운 사이를 유영하며, 하나의 기억에서 관련된 순간들이 별자리처럼 깨어납니다.</p>
+                </div>
+            </div>
+            <div class="scene-shell">
+                <canvas id="journeyCanvas" aria-label="기억 속 여행 스타일 3D 연결망"></canvas>
+                <div class="journey-aurora" aria-hidden="true"></div>
+                <div class="memory-date"><span>RECOVERED MEMORY</span><strong>2026 · SUMMER</strong></div>
+                <div class="journey-caption">
+                    <span class="caption-dot"></span>
+                    <div><small>떠오른 기억</small><strong id="journeyStatus">한강의 저녁 바람</strong></div>
+                </div>
+                <div class="scene-vignette" aria-hidden="true"></div>
+            </div>
+            <footer class="concept-footer">
+                <div class="concept-tags"><span>감정적</span><span>몽환적</span><span>시네마틱</span></div>
+                <button class="scene-toggle" data-scene-toggle="journey" type="button" aria-pressed="false">
+                    <span class="toggle-icon" aria-hidden="true">Ⅱ</span> 장면 멈춤
+                </button>
+            </footer>
+        </article>
+
+        <article class="concept-card concept-neon" data-concept="neon">
+            <div class="concept-copy">
+                <span class="concept-number">02</span>
+                <div>
+                    <span class="concept-eyebrow">NEURAL GRID</span>
+                    <h2>네온 SF 게임</h2>
+                    <p>기억을 좌표로 스캔하고, 에너지 경로를 추적하며 네트워크를 탐색합니다.</p>
+                </div>
+            </div>
+            <div class="scene-shell">
+                <canvas id="neonCanvas" aria-label="네온 SF 게임 스타일 3D 연결망"></canvas>
+                <div class="neon-scanlines" aria-hidden="true"></div>
+                <div class="neon-corners" aria-hidden="true"></div>
+                <div class="neon-topline"><span>MEMORY MATRIX // ONLINE</span><strong>SYNC 98.7%</strong></div>
+                <div class="neon-target" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+                <div class="neon-readout">
+                    <small>ACTIVE NODE</small>
+                    <strong id="neonStatus">MX-00 // CORE MEMORY</strong>
+                    <span>LINK STABILITY&nbsp;&nbsp;████████░░</span>
+                </div>
+                <div class="scene-vignette" aria-hidden="true"></div>
+            </div>
+            <footer class="concept-footer">
+                <div class="concept-tags"><span>강렬함</span><span>게임적</span><span>정보밀도</span></div>
+                <button class="scene-toggle" data-scene-toggle="neon" type="button" aria-pressed="false">
+                    <span class="toggle-icon" aria-hidden="true">Ⅱ</span> 장면 멈춤
+                </button>
+            </footer>
+        </article>
+    </main>
+
+    <footer class="page-note">
+        콘셉트 판단용 프로토타입 · 실제 일기 데이터는 사용하지 않습니다.
+    </footer>
+    <script type="module" src="/src/graph/preview.js"></script>
+</body>
+</html>

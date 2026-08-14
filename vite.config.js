@@ -1,7 +1,14 @@
 import { defineConfig } from 'vite';
+import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
     build: {
+        rollupOptions: {
+            input: {
+                app: fileURLToPath(new URL('./index.html', import.meta.url)),
+                graphPreview: fileURLToPath(new URL('./graph-preview.html', import.meta.url)),
+            },
+        },
         // 3d-force-graph + three는 그래프 모달 열릴 때만 dynamic import로 로드되므로
         // 초기 로딩 경로에는 영향 없다. 경고 한도를 올려 빌드 출력을 깔끔하게.
         chunkSizeWarningLimit: 1500,
