@@ -2,6 +2,9 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'node:url';
 
 export default defineConfig({
+    // GitHub Pages serves this repository below /Special-Diary/.
+    // Local development and other hosts keep the normal root path.
+    base: process.env.VITE_BASE_PATH || '/',
     build: {
         rollupOptions: {
             input: {
