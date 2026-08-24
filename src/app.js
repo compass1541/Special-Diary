@@ -3,6 +3,7 @@
  */
 import { storage } from './storage.js';
 import { supabaseStorage } from './supabase.js';
+import { getImportSummary, parseBackup } from './backup.js';
 import { gemini } from './gemini.js';
 import { GraphView } from './graph/view.js';
 import { PersonaChat } from './ai/persona.js';
@@ -90,6 +91,7 @@ export class DiaryApp {
 
         // New entry button
         document.getElementById('newEntryBtn').addEventListener('click', () => this.openTodayEntry());
+        document.getElementById('emptyNewEntryBtn')?.addEventListener('click', () => this.openTodayEntry());
 
         // Editor actions
         document.getElementById('closeEditorBtn').addEventListener('click', () => this.closeEditor());
@@ -211,21 +213,50 @@ export class DiaryApp {
         const file = e.target.files?.[0];
         e.target.value = ''; // 같은 파일 재선택 가능하게
         if (!file) return;
-        if (!confirm('가져온 일기가 같은 날짜의 기존 일기를 덮어쓸 수 있습니다. 계속할까요?')) return;
+        if (file.size > 10 * 1024 * 1024) {
+            alert('백업 파일은 10MB까지 가져올 수 있습니다.');
+            return;
+        }
         try {
             const text = await file.text();
-            const entries = JSON.parse(text);
-            if (!Array.isArray(entries)) throw new Error('올바른 백업 파일이 아닙니다');
-            // 로컬 IndexedDB에 가져오고, 클라우드 모드면 그 후 동기화
-            await storage.importData(JSON.stringify(entries));
+            const entries = parseBackup(text);
+            if (entries.length === 0) {
+                this.showToast('백업 파일에 가져올 일기가 없습니다.');
+                return;
+            }
+
+            const existingEntries = await this.getStorage().getAllEntries();
+            const summary = getImportSummary(entries, existingEntries);
+            const destination = this.useSupabase ? '로컬 백업과 클라우드' : '이 기기';
+            const conflictLine = summary.conflicts > 0
+                ? `\n같은 날짜 ${summary.conflicts}개는 기존 일기를 덮어씁니다.`
+                : '';
+            const approved = confirm(
+                `${summary.total}개의 일기를 ${destination}에 가져옵니다.`
+                + `\n새 일기 ${summary.additions}개${conflictLine}\n\n계속할까요?`
+            );
+            if (!approved) return;
+
+            // 로컬에는 한 트랜잭션으로 저장해 중간 실패 시 부분 가져오기를 방지한다.
+            await storage.importEntries(entries);
+            let synced = entries.length;
             if (this.useSupabase) {
-                const localEntries = await storage.getAllEntries();
-                await supabaseStorage.syncFromLocal(localEntries);
+                // 기존 로컬 일기를 모두 올리지 않고, 이번에 가져온 항목만 동기화한다.
+                synced = await supabaseStorage.syncFromLocal(entries);
             }
             await this.loadEntries();
             this.renderCalendar();
             this.renderEntriesList();
-            this.showToast(`${entries.length}개의 일기를 가져왔습니다 📤`);
+
+            if (this.useSupabase && synced !== entries.length) {
+                alert(
+                    `${entries.length}개 중 ${synced}개만 클라우드에 반영됐습니다.`
+                    + '\n모든 항목은 로컬 백업에 안전하게 저장됐으며, 네트워크 상태를 확인한 후 다시 시도해주세요.'
+                );
+                return;
+            }
+
+            this.showToast(`${entries.length}개의 일기를 가져왔습니다 ✓`);
         } catch (err) {
             console.error('Import failed:', err);
             alert(`가져오기 실패: ${err.message || '알 수 없는 오류'}`);

@@ -2,6 +2,8 @@
  * Storage Module - IndexedDB for diary entries
  */
 
+import { createBackup, parseBackup } from './backup.js';
+
 const DB_NAME = 'SpecialDiaryDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'entries';
@@ -181,18 +183,35 @@ export class DiaryStorage {
      */
     async exportData() {
         const entries = await this.getAllEntries();
-        return JSON.stringify(entries, null, 2);
+        return createBackup(entries);
     }
 
     /**
-     * Import data from JSON
+     * Import already validated entries in one atomic IndexedDB transaction.
+     */
+    async importEntries(entries) {
+        await this.ensureReady();
+
+        return new Promise((resolve, reject) => {
+            const transaction = this.db.transaction([STORE_NAME], 'readwrite');
+            const store = transaction.objectStore(STORE_NAME);
+
+            for (const entry of entries) {
+                store.put(entry);
+            }
+
+            transaction.oncomplete = () => resolve(entries.length);
+            transaction.onerror = () => reject(transaction.error);
+            transaction.onabort = () => reject(transaction.error || new Error('가져오기 저장이 취소되었습니다.'));
+        });
+    }
+
+    /**
+     * Parse, validate, and import a versioned or legacy JSON backup.
      */
     async importData(jsonString) {
-        const entries = JSON.parse(jsonString);
-        for (const entry of entries) {
-            await this.saveEntry(entry);
-        }
-        return entries.length;
+        const entries = parseBackup(jsonString);
+        return this.importEntries(entries);
     }
 }
 

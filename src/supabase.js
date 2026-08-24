@@ -4,6 +4,7 @@
  * Supabase를 사용한 일기 데이터 클라우드 동기화
  */
 import { createClient } from '@supabase/supabase-js';
+import { createBackup } from './backup.js';
 import { escapePostgRESTValue } from './utils/security.js';
 
 // 환경 변수에서 설정 로드
@@ -351,7 +352,7 @@ class SupabaseStorage {
      */
     async exportData() {
         const entries = await this.getAllEntries();
-        return JSON.stringify(entries, null, 2);
+        return createBackup(entries);
     }
 
     // ======================================
