@@ -5,6 +5,9 @@ AI 기반 스마트 일기장. Vanilla JS + Vite + Supabase + Google Gemini.
 - **AI 분신 "또 다른 나"** — 내 일기를 아는 페르소나와 대화. 질문과 관련된 일기를
   로컬 TF-IDF retrieval로 골라 보내고, 답변 속 `[[YYYY-MM-DD]]` 인용은 클릭하면 해당 일기가 열린다.
   "분신이 이해한 나" 프로필(가치관·주제·감정 패턴·습관·말투)을 생성/캐시.
+- **Gemini 3.8 Flash 대화** — 높은 추론 수준(`HIGH`)으로 최근 12회 대화와 관련 일기를 함께 참고.
+  후속 질문의 일기 맥락을 이어가고, 날짜·이번 달·지난달 질문은 해당 기간 기록을 우선한다.
+  위로·분석·조언 요청에 맞춰 답하며, 기록으로 확인되는 사실과 추측을 구분하도록 설정했다.
 - **기억의 우주 (3D 연결망 2.0)** — 공유 키워드가 **허브 노드**로 승격되는 2-모드 그래프.
   왜 연결됐는지가 구조로 보인다. Bloom 글로우, 스마트 라벨, 자유/시간 나선 레이아웃,
   클러스터 스포트라이트, 관련 일기 탐색, 그래프에서 바로 "분신에게 묻기".
@@ -71,7 +74,8 @@ supabase db push
 ```bash
 supabase functions deploy ai-proxy
 supabase secrets set GEMINI_API_KEY=<your_actual_gemini_key>
-# 모델 변경 시: supabase secrets set GEMINI_MODEL=gemini-2.5-pro
+# 모델 Secret을 이미 설정했다면 아래 명령으로 3.8 Flash로 맞춘다.
+supabase secrets set GEMINI_MODEL=gemini-3.8-flash
 ```
 
 배포 후, 클라이언트가 자동으로 Edge Function을 사용한다(supabase 로그인 상태일 때).
@@ -91,6 +95,18 @@ npm test             # vitest
 npm run lint         # eslint
 npm run format       # prettier
 ```
+
+Edge Function 타입 검사와 인증·대화 요청 통합 테스트는 Deno로 실행한다(실제 API 키 불필요).
+
+```bash
+npx --yes deno check --node-modules-dir=none --no-lock supabase/functions/ai-proxy/index.ts
+npx --yes deno test --node-modules-dir=none --no-lock --allow-env supabase/functions/ai-proxy/index.test.ts
+```
+
+브라우저 직접 호출과 Edge Function은 `supabase/functions/_shared/gemini.js`의 모델·대화 지침·요청 구성을 공유한다.
+대화에는 최근 24개 메시지와 최대 12개 관련 일기를 보내며, 일기 본문은 각 6,000자까지 전달한다.
+일부만 전달된 기록과 오래된 프로필임을 모델에 알린다. 검색·작성 제안·프로필 생성은 `MEDIUM` 추론을 사용한다.
+높은 추론 수준은 응답 시간과 토큰 사용량을 늘릴 수 있다.
 
 ---
 
@@ -116,7 +132,7 @@ npm run format       # prettier
 │   ├── app.js                                    # DiaryApp: 달력·편집기·인증 (그래프/분신은 모듈로 위임)
 │   ├── storage.js                                # IndexedDB
 │   ├── supabase.js                               # Supabase auth + diary CRUD + Edge Function 호출
-│   ├── gemini.js                                 # ai-proxy 호출 우선, 로컬 SDK 폴백 (+분신 chat/profile)
+│   ├── gemini.js                                 # ai-proxy 호출 우선, Gemini REST 직접 호출 폴백
 │   ├── styles.css                                # 다크 테마
 │   ├── graph/
 │   │   ├── data.js                               # 순수 함수: 노드/링크/허브/클러스터/나선 좌표 [tested]
@@ -133,6 +149,7 @@ npm run format       # prettier
 │   ├── migrations/
 │   │   └── 20260426_001_diary_entries_rls.sql    # 테이블 + RLS 정책
 │   └── functions/
+│       ├── _shared/gemini.js                     # 모델·대화 지침·요청/응답 처리 공유
 │       └── ai-proxy/
 │           └── index.ts                          # Gemini 프록시 (JWT 검증, 레이트 리밋, chat/profile)
 ├── .github/workflows/ci.yml                      # 빌드/테스트/키 노출 검사

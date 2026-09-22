@@ -2,7 +2,7 @@ import globals from 'globals';
 
 export default [
     {
-        files: ['src/**/*.js'],
+        files: ['src/**/*.js', 'supabase/functions/_shared/**/*.js'],
         languageOptions: {
             ecmaVersion: 2023,
             sourceType: 'module',

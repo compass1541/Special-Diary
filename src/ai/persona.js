@@ -2,7 +2,7 @@
  * PersonaChat — "또 다른 나" 분신의 상태 관리.
  *
  * 역할:
- *   - 대화 히스토리 유지 (세션 메모리, 최근 8턴만 모델에 전달)
+ *   - 대화 히스토리 유지 (세션 메모리, 최근 12교환만 모델에 전달)
  *   - 자기이해 프로필 캐시: localStorage에 사용자별 저장,
  *     지문(엔트리 수 + 최신 updatedAt)이 달라지면 stale로 표시
  *   - 질문마다 로컬 retrieval로 관련 일기 top-K만 골라 Gemini에 전달
@@ -12,10 +12,10 @@
 import { rankEntries } from './retrieval.js';
 import { gemini } from '../gemini.js';
 import { supabaseStorage } from '../supabase.js';
+import { HISTORY_WINDOW } from '../../supabase/functions/_shared/gemini.js';
 
 const PROFILE_KEY_PREFIX = 'special-diary:profile:v1:';
 const MAX_HISTORY = 40;      // 세션 내 보관 상한
-const HISTORY_WINDOW = 8;    // 모델에 전달하는 최근 메시지 수
 const RETRIEVAL_LIMIT = 12;
 
 export class PersonaChat {
@@ -23,6 +23,7 @@ export class PersonaChat {
     constructor({ getEntries }) {
         this.getEntries = getEntries;
         this.history = []; // { role: 'user'|'assistant', text }
+        this.contextIds = [];
     }
 
     _scope() {
@@ -98,7 +99,10 @@ export class PersonaChat {
      */
     async ask(question, { seedEntryId = null } = {}) {
         const entries = await this.getEntries();
-        let retrieved = rankEntries(question, entries, { limit: RETRIEVAL_LIMIT });
+        let retrieved = rankEntries(question, entries, {
+            limit: RETRIEVAL_LIMIT,
+            contextIds: this.contextIds,
+        });
 
         if (seedEntryId) {
             const seed = entries.find(e => e.id === seedEntryId);
@@ -108,15 +112,25 @@ export class PersonaChat {
             }
         }
 
-        const profile = this.readProfile()?.profile || null;
+        const cachedProfile = this.readProfile();
+        const profile = cachedProfile?.profile || null;
+        const today = new Date(Date.now());
         const reply = await gemini.personaChat({
             question,
             history: this.history.slice(-HISTORY_WINDOW),
             entries: retrieved,
             profile,
+            context: {
+                today: `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`,
+                totalEntries: entries.length,
+                profileStale: Boolean(cachedProfile && this.isProfileStale(entries)),
+            },
         });
 
         this.history.push({ role: 'user', text: question }, { role: 'assistant', text: reply });
+        const citedIds = [...reply.matchAll(/\[\[(\d{4}-\d{2}-\d{2})\]\]/g)]
+            .map(m => m[1]).filter(id => retrieved.some(e => e.id === id));
+        this.contextIds = [...new Set(citedIds.length ? citedIds : retrieved.slice(0, 3).map(e => e.id))];
         if (this.history.length > MAX_HISTORY) {
             this.history = this.history.slice(-MAX_HISTORY);
         }
@@ -125,5 +139,6 @@ export class PersonaChat {
 
     reset() {
         this.history = [];
+        this.contextIds = [];
     }
 }
